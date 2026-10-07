@@ -2,7 +2,7 @@
 // ── styles ───────────────────────────────────────────────────
 export const STYLES = `
   :host{display:block;}
-  .card{position:relative;background:var(--c-bg);color:var(--c-text);overflow:hidden;border-radius:var(--ha-card-border-radius,18px);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+  .card{position:relative;background:var(--c-bg);color:var(--c-text);overflow:hidden;border-radius:var(--ha-card-border-radius,18px);font-family:var(--ha-font-family-body,var(--paper-font-body1_-_font-family,Roboto,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif));}
   .section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--c-text3);}
 
   /* ── theme variables (dark = default) ── */
@@ -67,10 +67,12 @@ export const STYLES = `
      400px; beyond that the rows just stretch and the cameras lose width for
      nothing. */
   .card.wide .col-left{flex:1 1 auto;min-width:0;}
+  /* 320px: the narrowest a section can be on a Home Assistant sections
+     dashboard, so the panel lines up with the grid. */
   /* Always as tall as the card: it stretches to the row, which col-left sets.
      contain:size stops its own content from counting towards that height, or a
      long event list would stretch the whole card; it scrolls inside instead. */
-  .card.wide .col-right{align-self:stretch;contain:size;width:42%;max-width:400px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
+  .card.wide .col-right{align-self:stretch;contain:size;width:320px;max-width:320px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
   /* Separate sidebar: the outer card becomes a transparent frame and the camera
      side and the events panel each become a card of their own, with the same
      radius, border and shadow Home Assistant gives its cards. The gap is a
@@ -147,6 +149,27 @@ export const STYLES = `
      tile is never an empty box while the camera connects. */
   .grid-slot > .ph{position:absolute;inset:0;z-index:0;}
   .grid-slot > .grid-label{z-index:2;}
+  /* PTZ controls: a small pad over the corner of the live view. */
+  .ptz{position:absolute;right:12px;bottom:12px;z-index:7;display:none;gap:10px;align-items:flex-end;
+    background:rgba(15,21,40,.72);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:8px;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
+  .ptz-pad{display:grid;grid-template-columns:repeat(3,30px);grid-auto-rows:30px;gap:3px;}
+  .ptz-zoom{display:flex;flex-direction:column;gap:3px;}
+  .ptz-b{width:30px;height:30px;padding:0;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);
+    color:#fff;border-radius:8px;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    touch-action:none;user-select:none;-webkit-user-select:none;}
+  .ptz-b:hover{background:var(--c-acc-bg);border-color:var(--c-acc-bdr);}
+  .ptz-b:active{background:var(--c-acc);}
+  .ptz-presets{align-self:stretch;max-width:130px;background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.18);
+    border-radius:8px;font-size:11px;padding:0 6px;min-height:30px;}
+  .ptz-presets option{color:#111;}
+  /* On a grid tile the pad is smaller and only shows while the pointer is over it. */
+  .ptz-tile{right:6px;bottom:26px;gap:6px;padding:5px;border-radius:10px;}
+  .ptz-tile .ptz-pad{grid-template-columns:repeat(3,24px);grid-auto-rows:24px;gap:2px;}
+  .ptz-tile .ptz-b{width:24px;height:24px;font-size:11px;border-radius:6px;}
+  .ptz-tile .ptz-presets{min-height:24px;max-width:96px;font-size:10px;}
+  .grid-slot:hover > .ptz-tile{display:flex;}
+  .tool.on{color:var(--c-acc);}
   .grid-close-btn{position:absolute;top:6px;right:6px;width:22px;height:22px;background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:50%;font-size:11px;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center;line-height:1;}
   .grid-close-btn:hover{background:rgba(239,68,68,.7);}
   /* per-slot fullscreen button — appears on hover, bottom-right */
@@ -229,6 +252,11 @@ export const STYLES = `
   .pill{display:inline-flex;align-items:center;gap:4px;background:var(--c-bg-panel);border:1px solid var(--c-border2);border-radius:20px;padding:5px 11px 5px 9px;font-size:11px;font-weight:600;color:var(--c-text2);cursor:pointer;white-space:nowrap;flex-shrink:0;}
   .pill svg{width:11px;height:11px;opacity:.75;}
   .pill:hover,.pill.active{background:var(--c-acc-bg);border-color:var(--c-acc-bdr);color:#93c5fd;} .pill.active svg{opacity:1;}
+  /* The Live tab's icon breathes slowly while the tab is selected, like a
+     recording light. Off for anyone who has asked their system for less motion. */
+  .pill[data-tab="live"].active svg{animation:livePulse 2.4s ease-in-out infinite;}
+  @keyframes livePulse{0%,100%{opacity:1;}50%{opacity:.25;}}
+  @media (prefers-reduced-motion:reduce){.pill[data-tab="live"].active svg{animation:none;}}
   .pill.icon-only{padding:6px 8px;} .pill.icon-only svg{width:13px;height:13px;opacity:.85;}
 
   /* ── timeline ── */

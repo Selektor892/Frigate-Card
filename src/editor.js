@@ -150,6 +150,10 @@ export class FrigateModernHassCardEditor extends HTMLElement {
           <label class="radio-lbl"><input type="radio" name="default_view" value="grid" ${defaultView==='grid'?'checked':''}> ${this._t('e_grid_all')}</label>
         </div>
         <div style="margin-top:8px">
+          <label class="chk-lbl"><input type="checkbox" name="ptz_controls" id="ptz_controls" ${this._config?.ptz_controls!==false?'checked':''}> ${this._t('e_ptz_controls')}</label>
+          <small class="hint" style="display:block;margin-top:4px">${this._t('e_ptz_controls_hint')}</small>
+        </div>
+        <div style="margin-top:8px">
           <label class="chk-lbl"><input type="checkbox" name="rotate_on_load" id="rotate_on_load" ${rotateOnLoad?'checked':''}> ${this._t('e_rotate_on_load')}</label>
         </div>
         <div style="margin-top:6px">
@@ -384,6 +388,7 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     const sh = this.querySelector('#stream_height')?.value;
     c.stream_height = sh ? Number(sh) : null;
     c.events_collapsed = this.querySelector('#events_collapsed')?.checked === true;
+    c.ptz_controls = this.querySelector('#ptz_controls')?.checked !== false;
     c.sidebar_separate = this.querySelector('#sidebar_separate')?.checked === true;
     c.sidebar_position = this.querySelector('input[name="sidebar_position"]:checked')?.value === 'left' ? 'left' : 'right';
     if (this._config?.grid_layout) c.grid_layout = this._config.grid_layout;

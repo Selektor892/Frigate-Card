@@ -67,6 +67,9 @@ export class FrigateModernHassCard extends HTMLElement {
       sidebar_position: config.sidebar_position === 'left' ? 'left' : 'right',
       // Show the events panel as a separate rounded card instead of one block.
       sidebar_separate: config.sidebar_separate === true,
+      // PTZ pad for cameras Frigate reports as movable (ONVIF). On by default;
+      // a camera without PTZ shows nothing either way.
+      ptz_controls: config.ptz_controls !== false,
       // A named layout from GRID_LAYOUTS. It sets the column count and the tile
       // sizes together, so it overrides grid_columns and any per-camera span.
       grid_layout: findLayout(config.grid_layout) ? config.grid_layout : 'auto',
@@ -165,6 +168,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this._setupResizeObserver();
     await this._discoverAll();
     this._ready = true; // from here the grid can start real streams
+    this._config.cameras.forEach(c => this._loadPtz(c.entity)); // the grid shows a pad per camera
     const now = Math.floor(Date.now()/1000);
     this._winEnd = now; this._winStart = now - this._config.window_hours*3600;
     const startInGrid = this._config.default_view === 'grid' && this._config.cameras.length > 1;
@@ -710,13 +714,14 @@ export class FrigateModernHassCard extends HTMLElement {
         const lbl = document.createElement('div');
         lbl.className = 'grid-label'; lbl.textContent = name;
         slot.appendChild(lbl);
+        this._addTilePtz(slot, c.entity);
         // Click → open this camera in single view (_switchCamera switches the
         // view mode itself). Leave wall-display fullscreen first, otherwise we
         // would land on a single view stuck behind a fullscreened grid.
         // Guard: buttons inside the slot handle their own action (a clip played
         // in-slot renders its own close/fullscreen buttons); don't also switch.
         slot.addEventListener('click', ev => {
-          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot]')) return;
+          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot],.ptz')) return;
           if (!this._ready) return; // still the placeholder tiles
           this._exitFullscreen();
           this._switchCamera(i); this._renderCamSwitcher();
@@ -827,7 +832,11 @@ export class FrigateModernHassCard extends HTMLElement {
     // Only meaningful in the wide layout, where the events panel sits beside the
     // cameras. CSS hides it when narrow, since there the browse toggle does this.
     const events = `<button class="tool" id="sc-events"></button>`;
-    bar.innerHTML = `${grid}${fs}${events}`;
+    // Only offered for a camera Frigate says can move, and only in the single
+    // view: the pad acts on one camera.
+    const ptz = (this._config.ptz_controls && !inGrid && this._cc().ptz)
+      ? `<button class="tool${this._ptzOpen ? ' on' : ''}" id="sc-ptz" title="${this._t('ptz')}">${ICONS.ptz}</button>` : '';
+    bar.innerHTML = `${ptz}${grid}${fs}${events}`;
     this._applyEventsCollapsed();
   }
   _applyEventsCollapsed() {
@@ -874,10 +883,104 @@ export class FrigateModernHassCard extends HTMLElement {
       this._renderAll();
     }
     this._renderStreamCtrl();
+    this._updatePtz();
     this._renderCamSwitcher();
     this._applyBrowse();
     this.shadowRoot.querySelectorAll('[data-viewmode]').forEach(p =>
       p.classList.toggle('active', p.dataset.viewmode === mode));
+  }
+
+  // ── PTZ ───────────────────────────────────────────────────
+  // Frigate's integration answers frigate/ptz/info with what the camera can do
+  // (pan/tilt, zoom, named presets); a camera without ONVIF comes back empty.
+  // Moves go through the frigate.ptz service, which keeps moving until told to
+  // stop, so a button held down sends move and, on release, stop.
+  _ptzCaps(r) {
+    if (!r || typeof r !== 'object') return null;
+    const features = Array.isArray(r.features) ? r.features : [];
+    const presets = (Array.isArray(r.presets) ? r.presets : Object.keys(r.presets || {}))
+      .map(p => (typeof p === 'string' ? p : p?.name)).filter(Boolean);
+    if (!features.length && !presets.length) return null;
+    return {
+      pan: features.some(f => String(f).startsWith('pt')) || !features.length,
+      zoom: features.some(f => String(f).startsWith('zoom')) || !features.length,
+      presets,
+    };
+  }
+  // A grid tile's pad. It shows on hover (CSS) and only on a tile that is
+  // showing the live picture, not one playing a clip.
+  _addTilePtz(slot, entity) {
+    const caps = this._camCache[entity]?.ptz;
+    if (!this._config.ptz_controls || !caps || !slot || slot.querySelector(':scope > .ptz')) return;
+    const pad = document.createElement('div');
+    pad.className = 'ptz ptz-tile';
+    this._fillPtz(pad, caps, entity);
+    slot.appendChild(pad);
+  }
+  // The capabilities can arrive after the grid is drawn; add the pad then.
+  _refreshTilePtz(entity) {
+    const idx = this._config.cameras.findIndex(c => c.entity === entity);
+    const slot = this.shadowRoot.querySelectorAll('#cam-grid .grid-slot:not(.placeholder)')[idx];
+    if (!slot || slot.querySelector(':scope > video, :scope > img')) return;
+    this._addTilePtz(slot, entity);
+  }
+  async _loadPtz(entity = this._activeCam?.entity) {
+    if (!this._config.ptz_controls) return;
+    const ent = entity, cc = this._camCache[ent];
+    if (!cc || !cc.discovered) return;
+    if (cc.ptz === undefined) {
+      try { cc.ptz = this._ptzCaps(await this._ws({ type:'frigate/ptz/info', instance_id:cc.clientId, camera:cc.cam })); }
+      catch (_) { cc.ptz = null; }
+    }
+    if (this._viewMode === 'grid') this._refreshTilePtz(ent);
+    if (this._activeCam?.entity === ent) { this._renderStreamCtrl(); this._updatePtz(); }
+  }
+  _ptzSend(action, argument, entity = this._activeCam?.entity) {
+    if (!entity) return;
+    const data = argument ? { action, argument } : { action };
+    this._hass.callService('frigate', 'ptz', data, { entity_id: entity })
+      .catch(err => console.warn('[frigate-card] ptz failed', err));
+  }
+  _updatePtz() {
+    const el = this.shadowRoot.querySelector('#ptz'); if (!el) return;
+    const caps = this._cc().ptz;
+    const show = this._config.ptz_controls && caps && this._ptzOpen && this._viewMode === 'single' && !this._playing;
+    el.style.display = show ? 'flex' : 'none';
+    if (show && el.dataset.for !== this._activeCam.entity) this._renderPtz(el, caps);
+  }
+  _renderPtz(el, caps) {
+    el.dataset.for = this._activeCam.entity;
+    this._fillPtz(el, caps, this._activeCam.entity);
+  }
+  // The pad itself, for the single view and for each grid tile alike. `entity`
+  // is the camera it moves, which in a grid is not the active one.
+  _fillPtz(el, caps, entity) {
+    const b = (action, arg, glyph, label) =>
+      `<button class="ptz-b" data-ptz="${action}" data-arg="${arg}" title="${this._t(label)}">${glyph}</button>`;
+    const pad = caps.pan ? `<div class="ptz-pad">
+        <span></span>${b('move','up','▲','ptz_up')}<span></span>
+        ${b('move','left','◀','ptz_left')}${b('stop','','■','ptz_stop')}${b('move','right','▶','ptz_right')}
+        <span></span>${b('move','down','▼','ptz_down')}<span></span></div>` : '';
+    const zoom = caps.zoom ? `<div class="ptz-zoom">${b('zoom','in','+','ptz_zoom_in')}${b('zoom','out','−','ptz_zoom_out')}</div>` : '';
+    const presets = caps.presets.length
+      ? `<select class="ptz-presets"><option value="">${this._t('ptz_preset')}</option>${caps.presets.map(p => `<option value="${p}">${p}</option>`).join('')}</select>` : '';
+    el.innerHTML = pad + zoom + presets;
+    el.querySelectorAll('[data-ptz]').forEach(btn => {
+      const action = btn.dataset.ptz, arg = btn.dataset.arg;
+      if (action === 'stop') { btn.addEventListener('click', e => { e.stopPropagation(); this._ptzSend('stop', undefined, entity); }); return; }
+      // Held down keeps moving; any way of letting go stops it.
+      const stop = () => { if (btn._held) { btn._held = false; this._ptzSend('stop', undefined, entity); } };
+      btn.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+        btn._held = true; this._ptzSend(action, arg, entity);
+      });
+      ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => btn.addEventListener(ev, stop));
+    });
+    el.querySelector('.ptz-presets')?.addEventListener('change', e => {
+      if (e.target.value) this._ptzSend('preset', e.target.value, entity);
+      e.target.value = '';
+    });
   }
 
   // ── camera switching ──────────────────────────────────────
@@ -902,6 +1005,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this._events = cached.events||[]; this._recordings = cached.recordings||[];
     this._reviews = cached.reviews||[]; this._kept = cached.kept||[];
     this._renderCamSwitcher(); this._syncStatus();
+    this._loadPtz();
     await mounting;
     this._renderAll();
     await this._loadWindow(true);
@@ -1025,6 +1129,7 @@ export class FrigateModernHassCard extends HTMLElement {
               <div id="eng-wrap">
                 <div id="engine"><div class="ph">${ICONS.live}<span>${this._t('connecting')}</span></div></div>
                 <div class="viewer" id="viewer" style="display:none"></div>
+                <div class="ptz" id="ptz"></div>
 <div class="feed-top" id="feed-top" style="display:none">
                   <button class="btn back" id="back">${ICONS.back}<span>${this._t('live')}</span></button>
                 </div>
@@ -1082,7 +1187,10 @@ export class FrigateModernHassCard extends HTMLElement {
         <div class="toast" id="toast" style="display:none"></div>
       </ha-card>`;
     this._domCache = {}; // invalidate DOM element cache after full re-render
-    this.shadowRoot.addEventListener('click', e=>this._click(e));
+    // The shadow root outlives a re-render, so register once. Drawing the shell
+    // again (new config, or the language arriving) used to stack a second
+    // listener, and every click then ran twice: a toggle did nothing.
+    if (!this._clickWired) { this._clickWired = true; this.shadowRoot.addEventListener('click', e=>this._click(e)); }
     this._wireScrub(); this._wireScroll(); this._wirePinchZoom(); this._applyBrowse();
     if (multiCam) this._renderCamSwitcher();
     this._applyCardStyle();
@@ -1221,6 +1329,7 @@ export class FrigateModernHassCard extends HTMLElement {
     if (e.target.closest('#now-btn')) return this._goNow();
     if (e.target.closest('#browse-toggle')) return this._toggleBrowse();
     if (e.target.closest('#sc-events')) return this._toggleEvents();
+    if (e.target.closest('#sc-ptz')) { this._ptzOpen = !this._ptzOpen; this._renderStreamCtrl(); this._updatePtz(); return; }
     if (e.target.closest('#rotate-btn')) return this._toggleRotate();
     if (e.target.closest('[data-mark-all]')) return this._markAll();
     if (e.target.closest('[data-toggle-reviewed]')) { this._showReviewed=!this._showReviewed; this._renderList(); return; }
@@ -1295,6 +1404,7 @@ export class FrigateModernHassCard extends HTMLElement {
     slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
     if (this._config.live_provider === 'go2rtc') this._mountGridGo2rtc(slot, cam.entity);
     else this._mountGridHaStream(slot, cam.entity);
+    this._addTilePtz(slot, cam.entity);
   }
   // Play clip/snapshot inside the matching grid slot (stays in grid mode)
   async _openInGridSlot(id) {
@@ -1339,6 +1449,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#engine').style.display='none';
     const v=this.shadowRoot.querySelector('#viewer'); v.style.display='flex';
     this.shadowRoot.querySelector('#feed-top').style.display='flex';
+    const pad=this.shadowRoot.querySelector('#ptz'); if(pad) pad.style.display='none';
   }
   _showLive() {
     this._playing=null;
@@ -1346,6 +1457,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#engine').style.display='block';
     this.shadowRoot.querySelector('#feed-top').style.display='none';
     this._renderStreamCtrl();
+    this._updatePtz();
     this._revokeClipBlob();
   }
   _revokeClipBlob() {
