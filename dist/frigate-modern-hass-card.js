@@ -128,6 +128,23 @@ const STYLES = `
     --c-acc-bg:    rgba(37,99,235,.12);
     --c-acc-bdr:   rgba(37,99,235,.35);
   }
+  /* Follow the Home Assistant theme: take every colour from its own variables,
+     so the card changes with the theme (and with dark mode) on its own. The
+     video background stays dark in any theme, since the picture is what sits on it. */
+  .card.theme-ha {
+    --c-bg:        var(--ha-card-background, var(--card-background-color, #1c2233));
+    --c-bg-panel:  color-mix(in srgb, var(--primary-text-color, #888) 6%, transparent);
+    --c-bg-deep:   #0d1117;
+    --c-text:      var(--primary-text-color, #f0f4ff);
+    --c-text2:     var(--secondary-text-color, #9bb0d4);
+    --c-text3:     var(--secondary-text-color, #5c7099);
+    --c-text4:     var(--disabled-text-color, #3a4d6e);
+    --c-border:    var(--divider-color, rgba(255,255,255,.05));
+    --c-border2:   var(--divider-color, rgba(255,255,255,.08));
+    --c-acc:       var(--primary-color, #3b82f6);
+    --c-acc-bg:    color-mix(in srgb, var(--primary-color, #3b82f6) 18%, transparent);
+    --c-acc-bdr:   color-mix(in srgb, var(--primary-color, #3b82f6) 40%, transparent);
+  }
   /* ── responsive layout ── */
   .layout{display:flex;flex-direction:column;}
   /* Wide: side-by-side.
@@ -144,6 +161,21 @@ const STYLES = `
      nothing. */
   .card.wide .col-left{flex:1 1 auto;min-width:0;}
   .card.wide .col-right{width:42%;max-width:400px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
+  /* Separate sidebar: the outer card becomes a transparent frame and the camera
+     side and the events panel each become a card of their own, with the same
+     radius, border and shadow Home Assistant gives its cards. The gap is a
+     margin on the panel rather than on the layout, so a collapsed panel takes
+     no space at all. */
+  .card.sidebar-split{background:transparent;box-shadow:none;border:none;overflow:visible;}
+  .card.sidebar-split .col-left,.card.sidebar-split .col-right{
+    background:var(--c-bg);overflow:hidden;
+    border-radius:var(--ha-card-border-radius,12px);
+    border:var(--ha-card-border-width,1px) solid var(--ha-card-border-color,var(--divider-color,var(--c-border)));
+    box-shadow:var(--ha-card-box-shadow,none);}
+  .card.sidebar-split .col-right{margin-top:12px;}
+  .card.wide.sidebar-split .col-right{margin-top:0;margin-left:12px;overflow-y:auto;}
+  .card.wide.sidebar-split.sidebar-left .col-right{margin-left:0;margin-right:12px;}
+  .card.wide.sidebar-split.events-collapsed .col-right{margin-left:0;margin-right:0;border-width:0;}
   /* Sidebar on the left: swap the column order, move the divider to the other
      edge, and mirror the toggle icon so the filled block stays on the panel's side. */
   .card.wide.sidebar-left .layout{flex-direction:row-reverse;}
@@ -503,6 +535,7 @@ const STRINGS = {
     e_dark: 'Dark',
     e_light: 'Light',
     e_auto_browser: 'Auto (browser)',
+    e_ha_theme: 'Follow Home Assistant theme',
     e_colors: 'Colors',
     e_custom_accent: 'Custom accent',
     e_custom_bg: 'Custom background',
@@ -517,6 +550,8 @@ const STRINGS = {
     e_events_panel: 'Events panel',
     e_sidebar_right: 'Sidebar on the right',
     e_sidebar_left: 'Sidebar on the left',
+    e_sidebar_separate: 'Show the sidebar as a separate card',
+    e_sidebar_separate_hint: 'The events panel gets its own rounded card, with the same corners and border as the other Home Assistant cards, instead of being part of the same block.',
     e_events_collapsed: 'Start with the events panel hidden',
     e_events_collapsed_hint: 'On a wide card the events list sits beside the cameras. Hiding it gives the cameras the full width; a button on the card slides it back in.',
     e_live_provider: 'Live view provider',
@@ -641,6 +676,7 @@ const STRINGS = {
     e_dark: 'Scuro',
     e_light: 'Chiaro',
     e_auto_browser: 'Automatico (browser)',
+    e_ha_theme: 'Segui il tema di Home Assistant',
     e_colors: 'Colori',
     e_custom_accent: 'Colore di accento personalizzato',
     e_custom_bg: 'Sfondo personalizzato',
@@ -655,6 +691,8 @@ const STRINGS = {
     e_events_panel: 'Pannello eventi',
     e_sidebar_right: 'Barra laterale a destra',
     e_sidebar_left: 'Barra laterale a sinistra',
+    e_sidebar_separate: 'Mostra la barra laterale come card separata',
+    e_sidebar_separate_hint: 'Il pannello eventi diventa una card a sé, con gli stessi angoli arrotondati e lo stesso bordo delle altre card di Home Assistant, invece di far parte dello stesso blocco.',
     e_events_collapsed: 'Avvia con il pannello eventi nascosto',
     e_events_collapsed_hint: 'Su una card larga l’elenco eventi sta accanto alle telecamere. Nasconderlo lascia alle telecamere tutta la larghezza; un pulsante sulla card lo fa riapparire.',
     e_live_provider: 'Sorgente della vista live',
@@ -1456,7 +1494,7 @@ class FrigateModernHassCard extends HTMLElement {
       default_view: config.default_view === 'grid' ? 'grid' : 'single',
       hidden_tabs: Array.isArray(config.hidden_tabs) ? config.hidden_tabs : [],
       stream_height: config.stream_height ? Number(config.stream_height) : null,
-      theme: ['light','dark','auto'].includes(config.theme) ? config.theme : 'dark',
+      theme: ['light','dark','auto','ha'].includes(config.theme) ? config.theme : 'dark',
       accent_color: config.accent_color || null,
       bg_color: config.bg_color || null,
       // Live view source. 'go2rtc' streams via Frigate's built-in go2rtc
@@ -1466,6 +1504,8 @@ class FrigateModernHassCard extends HTMLElement {
       events_collapsed: config.events_collapsed === true,
       // Which side the events panel sits on when the card is wide.
       sidebar_position: config.sidebar_position === 'left' ? 'left' : 'right',
+      // Show the events panel as a separate rounded card instead of one block.
+      sidebar_separate: config.sidebar_separate === true,
       // A named layout from GRID_LAYOUTS. It sets the column count and the tile
       // sizes together, so it overrides grid_columns and any per-camera span.
       grid_layout: findLayout(config.grid_layout) ? config.grid_layout : 'auto',
@@ -2393,7 +2433,7 @@ class FrigateModernHassCard extends HTMLElement {
         : `<div class="pill icon-only" data-tab="${id}" title="${label}">${icon}</div>`;
 
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
-      <ha-card class="card ${this._config.theme==='light'?'theme-light':this._config.theme==='auto'?'theme-auto':''}${this._config.sidebar_position==='left'?' sidebar-left':''}" id="card">
+      <ha-card class="card ${this._config.theme==='light'?'theme-light':this._config.theme==='auto'?'theme-auto':this._config.theme==='ha'?'theme-ha':''}${this._config.sidebar_position==='left'?' sidebar-left':''}${this._config.sidebar_separate?' sidebar-split':''}" id="card">
         <div class="layout" id="layout">
           <div class="col-left">
             <!-- feed: single stream or grid -->
@@ -2491,10 +2531,13 @@ class FrigateModernHassCard extends HTMLElement {
       theme = (haDark ?? osDark ?? true) ? 'dark' : 'light';
     }
     card.classList.toggle('theme-light', theme === 'light');
+    card.classList.toggle('theme-ha', theme === 'ha');
     card.classList.remove('theme-auto'); // resolved to light/dark above
 
     // Custom accent color — compute bg/border variants from hex
-    const acc = this._config.accent_color;
+    // Following the Home Assistant theme means ignoring the custom colours.
+    const followHa = theme === 'ha';
+    const acc = followHa ? null : this._config.accent_color;
     if (acc && /^#[0-9a-f]{6}$/i.test(acc)) {
       const r = parseInt(acc.slice(1,3),16), g = parseInt(acc.slice(3,5),16), b = parseInt(acc.slice(5,7),16);
       card.style.setProperty('--c-acc',     acc);
@@ -2507,7 +2550,7 @@ class FrigateModernHassCard extends HTMLElement {
     }
 
     // Custom background color
-    const bg = this._config.bg_color;
+    const bg = followHa ? null : this._config.bg_color;
     if (bg && /^#[0-9a-f]{6}$/i.test(bg)) {
       card.style.setProperty('--c-bg', bg);
     } else {
@@ -3451,9 +3494,10 @@ class FrigateModernHassCardEditor extends HTMLElement {
           <label class="radio-lbl"><input type="radio" name="theme" value="dark"  ${(this._config?.theme||'dark')==='dark' ?'checked':''}> ${this._t('e_dark')}</label>
           <label class="radio-lbl"><input type="radio" name="theme" value="light" ${this._config?.theme==='light'?'checked':''}> ${this._t('e_light')}</label>
           <label class="radio-lbl"><input type="radio" name="theme" value="auto"  ${this._config?.theme==='auto' ?'checked':''}> ${this._t('e_auto_browser')}</label>
+          <label class="radio-lbl"><input type="radio" name="theme" value="ha" ${this._config?.theme==='ha'?'checked':''}> ${this._t('e_ha_theme')}</label>
         </div>
       </div>
-      <div class="section">
+      <div class="section" ${this._config?.theme==='ha'?'style="display:none"':''}>
         <span class="field-label">${this._t('e_colors')}</span>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px;">
           <div>
@@ -3507,6 +3551,8 @@ class FrigateModernHassCardEditor extends HTMLElement {
           <label class="radio-lbl"><input type="radio" name="sidebar_position" value="right" ${this._config?.sidebar_position!=='left'?'checked':''}> ${this._t('e_sidebar_right')}</label>
           <label class="radio-lbl"><input type="radio" name="sidebar_position" value="left" ${this._config?.sidebar_position==='left'?'checked':''}> ${this._t('e_sidebar_left')}</label>
         </div>
+        <label class="chk-lbl" style="margin-bottom:6px"><input type="checkbox" name="sidebar_separate" id="sidebar_separate" ${this._config?.sidebar_separate===true?'checked':''}> ${this._t('e_sidebar_separate')}</label>
+        <small class="hint" style="display:block;margin-bottom:8px">${this._t('e_sidebar_separate_hint')}</small>
         <label class="chk-lbl"><input type="checkbox" name="events_collapsed" id="events_collapsed" ${this._config?.events_collapsed===true?'checked':''}> ${this._t('e_events_collapsed')}</label>
         <small class="hint" style="display:block;margin-top:4px">${this._t('e_events_collapsed_hint')}</small>
       </div>
@@ -3580,6 +3626,8 @@ class FrigateModernHassCardEditor extends HTMLElement {
       this._render(); this._dispatch();
     }));
     this.querySelectorAll('select,input').forEach(el => el.addEventListener('change', () => this._u()));
+    // The custom colour section is hidden while the card follows the HA theme.
+    this.querySelectorAll('input[name="theme"]').forEach(el => el.addEventListener('change', () => this._render()));
     // prevent click outside from closing select while user is choosing
     this.querySelectorAll('select').forEach(sel => sel.addEventListener('mousedown', e => e.stopPropagation()));
     // sync color picker label as user drags
@@ -3665,6 +3713,7 @@ class FrigateModernHassCardEditor extends HTMLElement {
     const sh = this.querySelector('#stream_height')?.value;
     c.stream_height = sh ? Number(sh) : null;
     c.events_collapsed = this.querySelector('#events_collapsed')?.checked === true;
+    c.sidebar_separate = this.querySelector('#sidebar_separate')?.checked === true;
     c.sidebar_position = this.querySelector('input[name="sidebar_position"]:checked')?.value === 'left' ? 'left' : 'right';
     if (this._config?.grid_layout) c.grid_layout = this._config.grid_layout;
     const gc = this.querySelector('input[name="grid_columns"]:checked')?.value || 'auto';

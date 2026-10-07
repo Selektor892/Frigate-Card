@@ -164,9 +164,10 @@ export class FrigateModernHassCardEditor extends HTMLElement {
           <label class="radio-lbl"><input type="radio" name="theme" value="dark"  ${(this._config?.theme||'dark')==='dark' ?'checked':''}> ${this._t('e_dark')}</label>
           <label class="radio-lbl"><input type="radio" name="theme" value="light" ${this._config?.theme==='light'?'checked':''}> ${this._t('e_light')}</label>
           <label class="radio-lbl"><input type="radio" name="theme" value="auto"  ${this._config?.theme==='auto' ?'checked':''}> ${this._t('e_auto_browser')}</label>
+          <label class="radio-lbl"><input type="radio" name="theme" value="ha" ${this._config?.theme==='ha'?'checked':''}> ${this._t('e_ha_theme')}</label>
         </div>
       </div>
-      <div class="section">
+      <div class="section" ${this._config?.theme==='ha'?'style="display:none"':''}>
         <span class="field-label">${this._t('e_colors')}</span>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px;">
           <div>
@@ -220,6 +221,8 @@ export class FrigateModernHassCardEditor extends HTMLElement {
           <label class="radio-lbl"><input type="radio" name="sidebar_position" value="right" ${this._config?.sidebar_position!=='left'?'checked':''}> ${this._t('e_sidebar_right')}</label>
           <label class="radio-lbl"><input type="radio" name="sidebar_position" value="left" ${this._config?.sidebar_position==='left'?'checked':''}> ${this._t('e_sidebar_left')}</label>
         </div>
+        <label class="chk-lbl" style="margin-bottom:6px"><input type="checkbox" name="sidebar_separate" id="sidebar_separate" ${this._config?.sidebar_separate===true?'checked':''}> ${this._t('e_sidebar_separate')}</label>
+        <small class="hint" style="display:block;margin-bottom:8px">${this._t('e_sidebar_separate_hint')}</small>
         <label class="chk-lbl"><input type="checkbox" name="events_collapsed" id="events_collapsed" ${this._config?.events_collapsed===true?'checked':''}> ${this._t('e_events_collapsed')}</label>
         <small class="hint" style="display:block;margin-top:4px">${this._t('e_events_collapsed_hint')}</small>
       </div>
@@ -294,6 +297,8 @@ export class FrigateModernHassCardEditor extends HTMLElement {
       this._render(); this._dispatch();
     }));
     this.querySelectorAll('select,input').forEach(el => el.addEventListener('change', () => this._u()));
+    // The custom colour section is hidden while the card follows the HA theme.
+    this.querySelectorAll('input[name="theme"]').forEach(el => el.addEventListener('change', () => this._render()));
     // prevent click outside from closing select while user is choosing
     this.querySelectorAll('select').forEach(sel => sel.addEventListener('mousedown', e => e.stopPropagation()));
     // sync color picker label as user drags
@@ -379,6 +384,7 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     const sh = this.querySelector('#stream_height')?.value;
     c.stream_height = sh ? Number(sh) : null;
     c.events_collapsed = this.querySelector('#events_collapsed')?.checked === true;
+    c.sidebar_separate = this.querySelector('#sidebar_separate')?.checked === true;
     c.sidebar_position = this.querySelector('input[name="sidebar_position"]:checked')?.value === 'left' ? 'left' : 'right';
     if (this._config?.grid_layout) c.grid_layout = this._config.grid_layout;
     const gc = this.querySelector('input[name="grid_columns"]:checked')?.value || 'auto';

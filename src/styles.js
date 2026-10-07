@@ -35,6 +35,23 @@ export const STYLES = `
     --c-acc-bg:    rgba(37,99,235,.12);
     --c-acc-bdr:   rgba(37,99,235,.35);
   }
+  /* Follow the Home Assistant theme: take every colour from its own variables,
+     so the card changes with the theme (and with dark mode) on its own. The
+     video background stays dark in any theme, since the picture is what sits on it. */
+  .card.theme-ha {
+    --c-bg:        var(--ha-card-background, var(--card-background-color, #1c2233));
+    --c-bg-panel:  color-mix(in srgb, var(--primary-text-color, #888) 6%, transparent);
+    --c-bg-deep:   #0d1117;
+    --c-text:      var(--primary-text-color, #f0f4ff);
+    --c-text2:     var(--secondary-text-color, #9bb0d4);
+    --c-text3:     var(--secondary-text-color, #5c7099);
+    --c-text4:     var(--disabled-text-color, #3a4d6e);
+    --c-border:    var(--divider-color, rgba(255,255,255,.05));
+    --c-border2:   var(--divider-color, rgba(255,255,255,.08));
+    --c-acc:       var(--primary-color, #3b82f6);
+    --c-acc-bg:    color-mix(in srgb, var(--primary-color, #3b82f6) 18%, transparent);
+    --c-acc-bdr:   color-mix(in srgb, var(--primary-color, #3b82f6) 40%, transparent);
+  }
   /* ── responsive layout ── */
   .layout{display:flex;flex-direction:column;}
   /* Wide: side-by-side.
@@ -51,6 +68,21 @@ export const STYLES = `
      nothing. */
   .card.wide .col-left{flex:1 1 auto;min-width:0;}
   .card.wide .col-right{width:42%;max-width:400px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
+  /* Separate sidebar: the outer card becomes a transparent frame and the camera
+     side and the events panel each become a card of their own, with the same
+     radius, border and shadow Home Assistant gives its cards. The gap is a
+     margin on the panel rather than on the layout, so a collapsed panel takes
+     no space at all. */
+  .card.sidebar-split{background:transparent;box-shadow:none;border:none;overflow:visible;}
+  .card.sidebar-split .col-left,.card.sidebar-split .col-right{
+    background:var(--c-bg);overflow:hidden;
+    border-radius:var(--ha-card-border-radius,12px);
+    border:var(--ha-card-border-width,1px) solid var(--ha-card-border-color,var(--divider-color,var(--c-border)));
+    box-shadow:var(--ha-card-box-shadow,none);}
+  .card.sidebar-split .col-right{margin-top:12px;}
+  .card.wide.sidebar-split .col-right{margin-top:0;margin-left:12px;overflow-y:auto;}
+  .card.wide.sidebar-split.sidebar-left .col-right{margin-left:0;margin-right:12px;}
+  .card.wide.sidebar-split.events-collapsed .col-right{margin-left:0;margin-right:0;border-width:0;}
   /* Sidebar on the left: swap the column order, move the divider to the other
      edge, and mirror the toggle icon so the filled block stays on the panel's side. */
   .card.wide.sidebar-left .layout{flex-direction:row-reverse;}

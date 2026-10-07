@@ -55,7 +55,7 @@ export class FrigateModernHassCard extends HTMLElement {
       default_view: config.default_view === 'grid' ? 'grid' : 'single',
       hidden_tabs: Array.isArray(config.hidden_tabs) ? config.hidden_tabs : [],
       stream_height: config.stream_height ? Number(config.stream_height) : null,
-      theme: ['light','dark','auto'].includes(config.theme) ? config.theme : 'dark',
+      theme: ['light','dark','auto','ha'].includes(config.theme) ? config.theme : 'dark',
       accent_color: config.accent_color || null,
       bg_color: config.bg_color || null,
       // Live view source. 'go2rtc' streams via Frigate's built-in go2rtc
@@ -65,6 +65,8 @@ export class FrigateModernHassCard extends HTMLElement {
       events_collapsed: config.events_collapsed === true,
       // Which side the events panel sits on when the card is wide.
       sidebar_position: config.sidebar_position === 'left' ? 'left' : 'right',
+      // Show the events panel as a separate rounded card instead of one block.
+      sidebar_separate: config.sidebar_separate === true,
       // A named layout from GRID_LAYOUTS. It sets the column count and the tile
       // sizes together, so it overrides grid_columns and any per-camera span.
       grid_layout: findLayout(config.grid_layout) ? config.grid_layout : 'auto',
@@ -992,7 +994,7 @@ export class FrigateModernHassCard extends HTMLElement {
         : `<div class="pill icon-only" data-tab="${id}" title="${label}">${icon}</div>`;
 
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
-      <ha-card class="card ${this._config.theme==='light'?'theme-light':this._config.theme==='auto'?'theme-auto':''}${this._config.sidebar_position==='left'?' sidebar-left':''}" id="card">
+      <ha-card class="card ${this._config.theme==='light'?'theme-light':this._config.theme==='auto'?'theme-auto':this._config.theme==='ha'?'theme-ha':''}${this._config.sidebar_position==='left'?' sidebar-left':''}${this._config.sidebar_separate?' sidebar-split':''}" id="card">
         <div class="layout" id="layout">
           <div class="col-left">
             <!-- feed: single stream or grid -->
@@ -1090,10 +1092,13 @@ export class FrigateModernHassCard extends HTMLElement {
       theme = (haDark ?? osDark ?? true) ? 'dark' : 'light';
     }
     card.classList.toggle('theme-light', theme === 'light');
+    card.classList.toggle('theme-ha', theme === 'ha');
     card.classList.remove('theme-auto'); // resolved to light/dark above
 
     // Custom accent color — compute bg/border variants from hex
-    const acc = this._config.accent_color;
+    // Following the Home Assistant theme means ignoring the custom colours.
+    const followHa = theme === 'ha';
+    const acc = followHa ? null : this._config.accent_color;
     if (acc && /^#[0-9a-f]{6}$/i.test(acc)) {
       const r = parseInt(acc.slice(1,3),16), g = parseInt(acc.slice(3,5),16), b = parseInt(acc.slice(5,7),16);
       card.style.setProperty('--c-acc',     acc);
@@ -1106,7 +1111,7 @@ export class FrigateModernHassCard extends HTMLElement {
     }
 
     // Custom background color
-    const bg = this._config.bg_color;
+    const bg = followHa ? null : this._config.bg_color;
     if (bg && /^#[0-9a-f]{6}$/i.test(bg)) {
       card.style.setProperty('--c-bg', bg);
     } else {
