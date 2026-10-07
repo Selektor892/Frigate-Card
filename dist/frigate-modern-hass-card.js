@@ -7,7 +7,7 @@
  * always-visible compact latest event, camera entity picker in editor.
  * ---------------------------------------------------------------
  */
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const CARD_TAG = 'frigate-modern-hass-card';
 const DAY = 86400;
 // Smallest tile width the automatic grid will produce, in px. Below this a
@@ -260,7 +260,13 @@ const STYLES = `
   .grid-label{position:absolute;bottom:4px;left:6px;font-size:10px;font-weight:600;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.8);background:rgba(0,0,0,.45);padding:1px 7px;border-radius:10px;pointer-events:none;z-index:2;}
   /* More than one row: cap the height so the whole grid fits the viewport and
      let the tiles share it, rather than each keeping its 16:9 box. */
-  .card.grid-mode .cam-grid.multi-row:not(.stacked) { max-height:var(--stream-h,70vh); grid-template-rows:repeat(var(--grid-rows,2),1fr); }
+  /* The grid has a shape of its own, columns x rows of 16:9 tiles, instead of
+     taking its height from whatever is inside. Otherwise the tiles are as tall
+     as their content: a spinner gives nothing, so they collapsed while the
+     cameras connected, and then jumped to the size of the first picture. Now
+     the placeholders, the spinners and the finished video all share one size,
+     and max-height still trims it to fit the screen. */
+  .card.grid-mode .cam-grid.multi-row:not(.stacked) { aspect-ratio:calc(var(--grid-cols,2) * 16) / calc(var(--grid-rows,2) * 9); max-height:var(--stream-h,70vh); grid-template-rows:repeat(var(--grid-rows,2),1fr); }
   .card.grid-mode .cam-grid.multi-row:not(.stacked) .grid-slot { aspect-ratio:unset; min-height:0; }
   /* Stacked: tiles keep their 16:9 box and the column simply gets taller.
      Capping the height here would squash every tile, the same mistake as on
