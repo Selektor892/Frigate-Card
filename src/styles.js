@@ -67,7 +67,10 @@ export const STYLES = `
      400px; beyond that the rows just stretch and the cameras lose width for
      nothing. */
   .card.wide .col-left{flex:1 1 auto;min-width:0;}
-  .card.wide .col-right{width:42%;max-width:400px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
+  /* Always as tall as the card: it stretches to the row, which col-left sets.
+     contain:size stops its own content from counting towards that height, or a
+     long event list would stretch the whole card; it scrolls inside instead. */
+  .card.wide .col-right{align-self:stretch;contain:size;width:42%;max-width:400px;flex:0 0 auto;min-width:0;overflow-y:auto;border-left:1px solid var(--c-border);transition:width .28s ease,max-width .28s ease,opacity .18s ease;}
   /* Separate sidebar: the outer card becomes a transparent frame and the camera
      side and the events panel each become a card of their own, with the same
      radius, border and shadow Home Assistant gives its cards. The gap is a
@@ -139,7 +142,11 @@ export const STYLES = `
   .grid-slot:hover{box-shadow:inset 0 0 0 2px rgba(59,130,246,.5);}
   .grid-slot.placeholder{background:#06090f;cursor:default;}
   .grid-slot.placeholder:hover{box-shadow:none;}
-  .grid-slot ha-camera-stream,.grid-slot frigate-go2rtc-player{width:100%;height:100%;display:block;}
+  .grid-slot ha-camera-stream,.grid-slot frigate-go2rtc-player{width:100%;height:100%;display:block;position:relative;z-index:1;}
+  /* The spinner sits behind the stream and shows until it has a picture, so a
+     tile is never an empty box while the camera connects. */
+  .grid-slot > .ph{position:absolute;inset:0;z-index:0;}
+  .grid-slot > .grid-label{z-index:2;}
   .grid-close-btn{position:absolute;top:6px;right:6px;width:22px;height:22px;background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:50%;font-size:11px;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center;line-height:1;}
   .grid-close-btn:hover{background:rgba(239,68,68,.7);}
   /* per-slot fullscreen button — appears on hover, bottom-right */

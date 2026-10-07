@@ -141,11 +141,17 @@ export class FrigateModernHassCard extends HTMLElement {
   // Users can override in their dashboard yaml via grid_options.
   getGridSize() { return { columns: 2, rows: 3 }; }
 
+  connectedCallback() {
+    // Watch the width as soon as the card is on the page, so the first grid is
+    // already laid out for the real width and not rebuilt after the data arrives.
+    if (this._config) this._setupResizeObserver();
+  }
+
   disconnectedCallback() {
     this._stopRotate();
     if (this._refresh) clearInterval(this._refresh);
     if (this._unsub) { try { this._unsub.then(u=>u&&u()); } catch(_) {} this._unsub=null; }
-    if (this._ro) this._ro.disconnect();
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
     this._revokeClipBlob();
     this._teardownGo2rtc();
     this._teardownGridGo2rtc();
@@ -158,6 +164,7 @@ export class FrigateModernHassCard extends HTMLElement {
     // enormous on a wide dashboard.
     this._setupResizeObserver();
     await this._discoverAll();
+    this._ready = true; // from here the grid can start real streams
     const now = Math.floor(Date.now()/1000);
     this._winEnd = now; this._winStart = now - this._config.window_hours*3600;
     const startInGrid = this._config.default_view === 'grid' && this._config.cameras.length > 1;
@@ -692,11 +699,12 @@ export class FrigateModernHassCard extends HTMLElement {
         const name = cap(camDisplayName(c));
         // stream — go2rtc when configured (one WebSocket per tile is far
         // lighter than a full HLS pipeline each), otherwise the HA stream.
-        if (this._config.live_provider === 'go2rtc') {
-          slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
-          this._mountGridGo2rtc(slot, c.entity);
-        } else {
-          this._mountGridHaStream(slot, c.entity);
+        // Spinner first, so the tile is filled while the stream connects. Until
+        // the cameras are known (this._ready) it is all there is.
+        slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
+        if (this._ready) {
+          if (this._config.live_provider === 'go2rtc') this._mountGridGo2rtc(slot, c.entity);
+          else this._mountGridHaStream(slot, c.entity);
         }
         // label
         const lbl = document.createElement('div');
@@ -709,6 +717,7 @@ export class FrigateModernHassCard extends HTMLElement {
         // in-slot renders its own close/fullscreen buttons); don't also switch.
         slot.addEventListener('click', ev => {
           if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot]')) return;
+          if (!this._ready) return; // still the placeholder tiles
           this._exitFullscreen();
           this._switchCamera(i); this._renderCamSwitcher();
         });
@@ -723,8 +732,22 @@ export class FrigateModernHassCard extends HTMLElement {
     const s = document.createElement('ha-camera-stream');
     s.hass = this._hass; s.stateObj = stateObj; s.controls = false; s.muted = true;
     s.style.cssText = 'width:100%;height:100%;display:block;pointer-events:none';
-    slot.querySelector('.ph')?.remove();
+    if (!slot.querySelector(':scope > .ph')) slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
     slot.insertAdjacentElement('afterbegin', s);
+    this._dropSpinnerWhenPlaying(slot, s);
+  }
+  // The HA player gives no event for "has a picture", so look for its <video>
+  // (inside nested shadow roots) until it has frames. Gives up after 20s and
+  // drops the spinner anyway: it sits behind the stream, but a spinner left
+  // forever would suggest something is still loading.
+  _dropSpinnerWhenPlaying(slot, el) {
+    let ticks = 0;
+    const iv = setInterval(() => {
+      const done = () => { clearInterval(iv); slot.querySelector(':scope > .ph')?.remove(); };
+      if (!el.isConnected) { clearInterval(iv); return; }
+      const v = this._findVideo(el, 0);
+      if ((v && v.readyState >= 2 && v.videoWidth) || ++ticks > 80) done();
+    }, 250);
   }
   // A grid tile's go2rtc stream. No controls here: tiles stay
   // pointer-events:none so a click selects the camera rather than hitting the
@@ -1063,6 +1086,16 @@ export class FrigateModernHassCard extends HTMLElement {
     this._wireScrub(); this._wireScroll(); this._wirePinchZoom(); this._applyBrowse();
     if (multiCam) this._renderCamSwitcher();
     this._applyCardStyle();
+    // Before the cameras are known there is nothing to show yet, and a grid
+    // dashboard would be an empty box for the first few seconds. Draw the tiles
+    // now, each with a spinner, so the space is held and filled.
+    if (!this._ready && this._config.default_view === 'grid' && multiCam) {
+      this._viewMode = 'grid';
+      this.shadowRoot.querySelector('.card')?.classList.add('grid-mode');
+      this.shadowRoot.querySelector('#eng-wrap').style.display = 'none';
+      this.shadowRoot.querySelector('#cam-grid').style.display = '';
+      this._mountGrid();
+    }
   }
 
   _applyCardStyle() {
@@ -1151,8 +1184,9 @@ export class FrigateModernHassCard extends HTMLElement {
       const l = this.shadowRoot.querySelector('.col-left');
       const r = this.shadowRoot.querySelector('.col-right');
       if (!l || !r) return;
-      const h = l.offsetHeight;
-      if (h > 0) r.style.maxHeight = h + 'px';
+      // The events column now takes its height from the row (see the CSS), so a
+      // cap left over from an earlier layout would only get in the way.
+      r.style.maxHeight = '';
     });
   }
 
@@ -1258,12 +1292,9 @@ export class FrigateModernHassCard extends HTMLElement {
     if (!slot || !cam) { this._mountGrid(); return; }
     this._stopSlotPlayer(slot);
     slot.innerHTML = `<div class="grid-label">${cap(camDisplayName(cam))}</div>`;
-    if (this._config.live_provider === 'go2rtc') {
-      slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
-      this._mountGridGo2rtc(slot, cam.entity);
-    } else {
-      this._mountGridHaStream(slot, cam.entity);
-    }
+    slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
+    if (this._config.live_provider === 'go2rtc') this._mountGridGo2rtc(slot, cam.entity);
+    else this._mountGridHaStream(slot, cam.entity);
   }
   // Play clip/snapshot inside the matching grid slot (stays in grid mode)
   async _openInGridSlot(id) {
