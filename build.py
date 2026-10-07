@@ -24,8 +24,8 @@ MODULES = [
     'src/index.js',
 ]
 
-OUTPUT = 'frigate-modern-hass-card.js'
-BETA_OUTPUT = 'frigate-modern-hass-card-beta.js'
+OUTPUT = 'dist/frigate-modern-hass-card.js'
+BETA_OUTPUT = 'dist/frigate-modern-hass-card-beta.js'
 
 # Methods available on the element itself without being declared in src/.
 INHERITED = {
@@ -141,6 +141,7 @@ def bundle(beta=False):
             "CARD_TAG = 'frigate-modern-hass-card'",
             "CARD_TAG = 'frigate-modern-hass-card-beta'")
 
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w', encoding='utf-8') as f:
         f.write(joined)
 
