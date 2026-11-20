@@ -169,6 +169,24 @@ export const STYLES = `
   .ptz-tile .ptz-b{width:24px;height:24px;font-size:11px;border-radius:6px;}
   .ptz-tile .ptz-presets{min-height:24px;max-width:96px;font-size:10px;}
   .grid-slot:hover > .ptz-tile{display:flex;}
+  /* Switches and sensors of a camera, as chips over the top left corner. */
+  .ent-bar{position:absolute;top:10px;left:12px;right:56px;z-index:6;display:flex;flex-wrap:wrap;gap:6px;
+    align-items:flex-start;pointer-events:none;}
+  .ent-chip{pointer-events:auto;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px 0 7px;
+    border-radius:14px;border:1px solid rgba(255,255,255,.18);background:rgba(15,21,40,.62);color:#fff;
+    font:inherit;font-size:11.5px;font-weight:600;line-height:1;cursor:pointer;white-space:nowrap;max-width:100%;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);--mdc-icon-size:16px;transition:background .15s,border-color .15s,opacity .15s;}
+  .ent-chip span{overflow:hidden;text-overflow:ellipsis;}
+  .ent-chip ha-icon,.ent-chip ha-state-icon{display:flex;flex-shrink:0;}
+  .ent-chip:hover{border-color:var(--c-acc-bdr);}
+  .ent-sw.on{background:var(--c-acc);border-color:var(--c-acc);}
+  .ent-sn.on{background:rgba(239,68,68,.75);border-color:rgba(239,68,68,.9);}
+  .ent-chip.na{opacity:.5;}
+  .ent-chip.busy{opacity:.6;pointer-events:none;}
+  /* Smaller on a grid tile, where a switch is its icon alone. */
+  .ent-tile{top:5px;left:6px;right:34px;gap:4px;}
+  .ent-tile .ent-chip{height:22px;padding:0 7px 0 5px;font-size:10px;gap:3px;--mdc-icon-size:13px;}
+  .ent-tile .ent-sw{padding:0 5px;}
   .tool.on{color:var(--c-acc);}
   .grid-close-btn{position:absolute;top:6px;right:6px;width:22px;height:22px;background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:50%;font-size:11px;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center;line-height:1;}
   .grid-close-btn:hover{background:rgba(239,68,68,.7);}

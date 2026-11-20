@@ -7,7 +7,7 @@
  * always-visible compact latest event, camera entity picker in editor.
  * ---------------------------------------------------------------
  */
-export const VERSION = '1.5.0';
+export const VERSION = '1.6.0';
 export const CARD_TAG = 'frigate-modern-hass-card';
 export const DAY = 86400;
 // Smallest tile width the automatic grid will produce, in px. Below this a
@@ -88,6 +88,13 @@ export function normSpan(span) {
   return { cols: 1, rows: 1 };
 }
 export function mkCamState() { return { clientId:'frigate', cam:'', events:[], recordings:[], reviews:[], kept:[], discovered:false }; }
+// A camera's switches or sensors: each entry an entity id, or
+// {entity, name, icon} to override what Home Assistant calls it.
+export function normEntList(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(x => (typeof x === 'string' ? { entity: x } : (x && typeof x.entity === 'string' ? { entity: x.entity, name: x.name || null, icon: x.icon || null } : null)))
+    .filter(x => x && /^[a-z_]+\.[\w]+$/.test(x.entity));
+}
 export function camDisplayName(c) { return c.name || (c.entity||'').replace(/^camera\./,'').replace(/_/g,' '); }
 
 // ── main card ────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 // card.js — main FrigateModernHassCard custom element
 import { VERSION, CARD_TAG, DAY, DEFAULT_ROTATE_S, ICONS, cap, parseWs,
-         labelColor, CAM_COLORS, MIN_TILE_PX, PHONE_PX, normSpan, findLayout, mkCamState, camDisplayName } from './constants.js';
+         labelColor, CAM_COLORS, MIN_TILE_PX, PHONE_PX, normSpan, findLayout, mkCamState, camDisplayName,
+         normEntList } from './constants.js';
 import { STYLES } from './styles.js';
 import { t, langOf } from './i18n.js';
 
@@ -38,9 +39,11 @@ export class FrigateModernHassCard extends HTMLElement {
   setConfig(config) {
     let cameras;
     if (config.cameras && Array.isArray(config.cameras) && config.cameras.length)
-      cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span) }));
+      cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span),
+        switches:normEntList(c.switches), sensors:normEntList(c.sensors) }));
     else if (config.camera_entity)
-      cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan() }];
+      cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan(),
+        switches:normEntList(config.switches), sensors:normEntList(config.sensors) }];
     else throw new Error('camera_entity or cameras[] required');
 
     this._config = {
@@ -128,6 +131,7 @@ export class FrigateModernHassCard extends HTMLElement {
       }
     }
     this._syncStatus();
+    this._refreshEntBars();
     if (this._config.theme === 'auto') this._applyCardStyle(); // re-evaluate HA dark mode
   }
 
@@ -714,6 +718,7 @@ export class FrigateModernHassCard extends HTMLElement {
         const lbl = document.createElement('div');
         lbl.className = 'grid-label'; lbl.textContent = name;
         slot.appendChild(lbl);
+        this._addTileEnts(slot, i);
         this._addTilePtz(slot, c.entity);
         // Click → open this camera in single view (_switchCamera switches the
         // view mode itself). Leave wall-display fullscreen first, otherwise we
@@ -721,7 +726,7 @@ export class FrigateModernHassCard extends HTMLElement {
         // Guard: buttons inside the slot handle their own action (a clip played
         // in-slot renders its own close/fullscreen buttons); don't also switch.
         slot.addEventListener('click', ev => {
-          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot],.ptz')) return;
+          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot],.ptz,.ent-bar')) return;
           if (!this._ready) return; // still the placeholder tiles
           this._exitFullscreen();
           this._switchCamera(i); this._renderCamSwitcher();
@@ -884,6 +889,7 @@ export class FrigateModernHassCard extends HTMLElement {
     }
     this._renderStreamCtrl();
     this._updatePtz();
+    this._renderEntBar();
     this._renderCamSwitcher();
     this._applyBrowse();
     this.shadowRoot.querySelectorAll('[data-viewmode]').forEach(p =>
@@ -983,6 +989,115 @@ export class FrigateModernHassCard extends HTMLElement {
     });
   }
 
+  // ── switches and sensors ──────────────────────────────────
+  // Each camera can carry a few entities of its own: switches (Frigate's
+  // detect/recordings/snapshots, a light, a siren...) shown as buttons that
+  // toggle, and sensors shown as read-only chips. They sit over the top left
+  // corner of the picture, in the single view and on every grid tile.
+  _entIcon(id, st, cfgIcon) {
+    if (cfgIcon) return `<ha-icon icon="${cfgIcon}"></ha-icon>`;
+    if (st && customElements.get('ha-state-icon')) return `<ha-state-icon data-icon-for="${id}"></ha-state-icon>`;
+    if (st?.attributes?.icon) return `<ha-icon icon="${st.attributes.icon}"></ha-icon>`;
+    const on = st?.state === 'on';
+    const d = id.split('.')[0];
+    const icon = ({
+      switch: on ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline',
+      input_boolean: on ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline',
+      light: on ? 'mdi:lightbulb' : 'mdi:lightbulb-outline',
+      fan: 'mdi:fan', siren: 'mdi:bullhorn', button: 'mdi:gesture-tap-button',
+      input_button: 'mdi:gesture-tap-button', script: 'mdi:script-text', scene: 'mdi:palette',
+      binary_sensor: on ? 'mdi:checkbox-marked-circle' : 'mdi:checkbox-blank-circle-outline',
+    })[d] || 'mdi:eye';
+    return `<ha-icon icon="${icon}"></ha-icon>`;
+  }
+  // A Frigate switch is called "Front Door Detect"; on a chip over the front
+  // door camera "Detect" is all that needs saying.
+  _entName(item, st, cam) {
+    if (item.name) return item.name;
+    let n = st?.attributes?.friendly_name || item.entity.split('.')[1].replace(/_/g, ' ');
+    const camName = this._hass?.states[cam.entity]?.attributes?.friendly_name || camDisplayName(cam);
+    if (camName && n.toLowerCase().startsWith(camName.toLowerCase() + ' ')) n = n.slice(camName.length + 1);
+    return cap(n);
+  }
+  _entValue(st) {
+    if (!st) return '';
+    try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (_) {}
+    const u = st.attributes?.unit_of_measurement;
+    return u ? `${st.state} ${u}` : st.state;
+  }
+  _esc(v) { return String(v ?? '').replace(/[&<>"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' })[ch]); }
+  // Fills one bar. `compact` is a grid tile: switches lose their label there,
+  // the name stays in the tooltip. Only redrawn when something it shows changed,
+  // since hass updates arrive many times a second.
+  _fillEntBar(bar, camIdx, compact) {
+    const cam = this._config.cameras[camIdx];
+    const items = cam ? [...(cam.sensors || []).map(x => ({ ...x, kind: 'sensor' })),
+                         ...(cam.switches || []).map(x => ({ ...x, kind: 'switch' }))] : [];
+    const states = this._hass?.states || {};
+    const sig = items.map(x => { const st = states[x.entity]; return x.entity + '=' + (st ? st.state + '|' + st.last_updated : '-'); }).join(';')
+      + '|' + this._shellLang;
+    if (bar._sig === sig && bar.dataset.cam === String(camIdx)) return items.length > 0;
+    bar._sig = sig; bar.dataset.cam = String(camIdx);
+    bar.innerHTML = items.map(x => {
+      const st = states[x.entity];
+      const na = !st || st.state === 'unavailable' || st.state === 'unknown';
+      const name = this._entName(x, st, cam);
+      const on = st && ['on', 'open', 'detected', 'home', 'playing'].includes(st.state);
+      const icon = this._entIcon(x.entity, st, x.icon);
+      if (x.kind === 'switch') {
+        return `<button class="ent-chip ent-sw${on ? ' on' : ''}${na ? ' na' : ''}" data-ent="${this._esc(x.entity)}" data-kind="switch"
+          title="${this._esc(name)}: ${this._esc(this._entValue(st) || this._t('unavailable'))}">${icon}${compact ? '' : `<span>${this._esc(name)}</span>`}</button>`;
+      }
+      // A binary sensor says what it is and shows its state by colour; a value
+      // alone ("2") needs the name beside it unless space is short.
+      const isBinary = x.entity.startsWith('binary_sensor.');
+      const val = st ? this._entValue(st) : this._t('unavailable');
+      return `<button class="ent-chip ent-sn${isBinary && on ? ' on' : ''}${na ? ' na' : ''}" data-ent="${this._esc(x.entity)}" data-kind="sensor"
+        title="${this._esc(name)}: ${this._esc(val)}">${icon}<span>${this._esc(isBinary ? name : compact ? val : `${name} ${val}`)}</span></button>`;
+    }).join('');
+    bar.querySelectorAll('ha-state-icon[data-icon-for]').forEach(el => {
+      el.hass = this._hass; el.stateObj = states[el.dataset.iconFor];
+    });
+    return items.length > 0;
+  }
+  _renderEntBar() {
+    const bar = this._$('#ent-bar'); if (!bar) return;
+    const show = this._viewMode === 'single' && !this._playing
+      && this._fillEntBar(bar, this._config.cameras.indexOf(this._activeCam), false);
+    bar.style.display = show ? 'flex' : 'none';
+  }
+  _addTileEnts(slot, idx) {
+    if (!slot || slot.querySelector(':scope > .ent-bar')) return;
+    const bar = document.createElement('div');
+    bar.className = 'ent-bar ent-tile';
+    if (this._fillEntBar(bar, idx, true)) slot.appendChild(bar);
+  }
+  _refreshEntBars() {
+    if (!this._config?.cameras.some(c => c.switches.length || c.sensors.length)) return;
+    if (this._viewMode === 'single') this._renderEntBar();
+    this.shadowRoot.querySelectorAll('#cam-grid .ent-tile').forEach(bar => {
+      this._fillEntBar(bar, Number(bar.dataset.cam), true);
+    });
+  }
+  // A switch toggles; buttons, scripts and scenes run. A sensor has nothing to
+  // do, so it opens Home Assistant's own dialog with its history.
+  _entAction(btn) {
+    const id = btn.dataset.ent;
+    if (btn.dataset.kind !== 'switch') {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: id } }));
+      return;
+    }
+    const d = id.split('.')[0];
+    const [domain, service] = ({
+      button: ['button', 'press'], input_button: ['input_button', 'press'],
+      script: ['script', 'turn_on'], scene: ['scene', 'turn_on'],
+    })[d] || ['homeassistant', 'toggle'];
+    btn.classList.add('busy');
+    this._hass.callService(domain, service, { entity_id: id })
+      .catch(err => { console.warn('[frigate-card] toggle failed', err); this._toast(this._t('action_failed')); })
+      .finally(() => setTimeout(() => btn.classList.remove('busy'), 600));
+  }
+
   // ── camera switching ──────────────────────────────────────
   async _switchCamera(idx) {
     if (idx === this._activeCamIdx && this._viewMode === 'single') return;
@@ -1005,6 +1120,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this._events = cached.events||[]; this._recordings = cached.recordings||[];
     this._reviews = cached.reviews||[]; this._kept = cached.kept||[];
     this._renderCamSwitcher(); this._syncStatus();
+    this._renderEntBar();
     this._loadPtz();
     await mounting;
     this._renderAll();
@@ -1130,6 +1246,7 @@ export class FrigateModernHassCard extends HTMLElement {
                 <div id="engine"><div class="ph">${ICONS.live}<span>${this._t('connecting')}</span></div></div>
                 <div class="viewer" id="viewer" style="display:none"></div>
                 <div class="ptz" id="ptz"></div>
+                <div class="ent-bar" id="ent-bar" style="display:none"></div>
 <div class="feed-top" id="feed-top" style="display:none">
                   <button class="btn back" id="back">${ICONS.back}<span>${this._t('live')}</span></button>
                 </div>
@@ -1331,6 +1448,8 @@ export class FrigateModernHassCard extends HTMLElement {
     if (e.target.closest('#sc-events')) return this._toggleEvents();
     if (e.target.closest('#sc-ptz')) { this._ptzOpen = !this._ptzOpen; this._renderStreamCtrl(); this._updatePtz(); return; }
     if (e.target.closest('#rotate-btn')) return this._toggleRotate();
+    const entBtn = e.target.closest('[data-ent]');
+    if (entBtn) { e.stopPropagation(); return this._entAction(entBtn); }
     if (e.target.closest('[data-mark-all]')) return this._markAll();
     if (e.target.closest('[data-toggle-reviewed]')) { this._showReviewed=!this._showReviewed; this._renderList(); return; }
 
@@ -1404,6 +1523,7 @@ export class FrigateModernHassCard extends HTMLElement {
     slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
     if (this._config.live_provider === 'go2rtc') this._mountGridGo2rtc(slot, cam.entity);
     else this._mountGridHaStream(slot, cam.entity);
+    this._addTileEnts(slot, idx);
     this._addTilePtz(slot, cam.entity);
   }
   // Play clip/snapshot inside the matching grid slot (stays in grid mode)
@@ -1449,7 +1569,8 @@ export class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#engine').style.display='none';
     const v=this.shadowRoot.querySelector('#viewer'); v.style.display='flex';
     this.shadowRoot.querySelector('#feed-top').style.display='flex';
-    const pad=this.shadowRoot.querySelector('#ptz'); if(pad) pad.style.display='none';
+    const pad=this._$('#ptz'); if(pad) pad.style.display='none';
+    const ents=this._$('#ent-bar'); if(ents) ents.style.display='none';
   }
   _showLive() {
     this._playing=null;
@@ -1458,6 +1579,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#feed-top').style.display='none';
     this._renderStreamCtrl();
     this._updatePtz();
+    this._renderEntBar();
     this._revokeClipBlob();
   }
   _revokeClipBlob() {

@@ -87,6 +87,9 @@ const configs = [
   { cameras: [{ entity: 'camera.one' }, { entity: 'camera.two', span: 2 }] },
   { cameras: [{ entity: 'camera.one' }], grid_layout: '6-big' },
   { cameras: [{ entity: 'camera.one' }], grid_columns: 3, live_provider: 'go2rtc' },
+  { camera_entity: 'camera.one', switches: ['switch.one_detect'], sensors: ['sensor.one_person_count'] },
+  { cameras: [{ entity: 'camera.one', switches: ['switch.one_detect', { entity: 'light.porch', name: 'Porch' }],
+                sensors: ['binary_sensor.one_motion'] }, { entity: 'camera.two' }] },
 ];
 
 for (const config of configs) {
