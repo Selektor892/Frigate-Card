@@ -1,5 +1,5 @@
 // editor.js — FrigateModernHassCardEditor config panel
-import { DEFAULT_ROTATE_S, GRID_LAYOUTS, findLayout } from './constants.js';
+import { DEFAULT_ROTATE_S, GRID_LAYOUTS, findLayout, camRelated, ptzRole, ptzEntityMap, parseWs } from './constants.js';
 import { t } from './i18n.js';
 
 export class FrigateModernHassCardEditor extends HTMLElement {
@@ -117,6 +117,7 @@ export class FrigateModernHassCardEditor extends HTMLElement {
       .lay-auto{width:100%;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;
         color:var(--ed-dim);font-size:10px;text-align:center;border:1px dashed var(--ed-line);border-radius:4px;}
       .xr{margin:-2px 0 8px 31px;}
+      .xh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
       .xt{padding:3px 9px;border:1px dashed var(--ed-line);background:transparent;color:var(--ed-dim);
         border-radius:6px;cursor:pointer;font-size:11px;}
       .xt.on,.xt.has{border-style:solid;border-color:var(--ed-acc);color:var(--ed-acc);}
@@ -161,10 +162,6 @@ export class FrigateModernHassCardEditor extends HTMLElement {
         <div class="radio-row">
           <label class="radio-lbl"><input type="radio" name="default_view" value="single" ${defaultView==='single'?'checked':''}> ${this._t('e_single_camera')}</label>
           <label class="radio-lbl"><input type="radio" name="default_view" value="grid" ${defaultView==='grid'?'checked':''}> ${this._t('e_grid_all')}</label>
-        </div>
-        <div style="margin-top:8px">
-          <label class="chk-lbl"><input type="checkbox" name="ptz_controls" id="ptz_controls" ${this._config?.ptz_controls!==false?'checked':''}> ${this._t('e_ptz_controls')}</label>
-          <small class="hint" style="display:block;margin-top:4px">${this._t('e_ptz_controls_hint')}</small>
         </div>
         <div style="margin-top:8px">
           <label class="chk-lbl"><input type="checkbox" name="rotate_on_load" id="rotate_on_load" ${rotateOnLoad?'checked':''}> ${this._t('e_rotate_on_load')}</label>
@@ -306,7 +303,7 @@ export class FrigateModernHassCardEditor extends HTMLElement {
       const cur = this._getCams(); // keeps the sizes, which belong to the tile
       const nameOf = k => before[k]?.name || '';
       // Switches and sensors belong to the camera, so they move with it.
-      const extrasOf = k => ({ switches: before[k]?.switches, sensors: before[k]?.sensors });
+      const extrasOf = k => ({ switches: before[k]?.switches, sensors: before[k]?.sensors, ptz: before[k]?.ptz });
       cur[i] = this._withExtras({ ...cur[i], entity: picked, name: nameOf(j) }, extrasOf(j));
       cur[j] = this._withExtras({ ...cur[j], entity: before[i]?.entity || '', name: nameOf(i) }, extrasOf(i));
       this._config = { ...this._config, cameras: cur }; delete this._config.camera_entity;
@@ -386,9 +383,10 @@ export class FrigateModernHassCardEditor extends HTMLElement {
   }
   _withExtras(cam, src) {
     const out = { ...cam };
-    delete out.switches; delete out.sensors;
+    delete out.switches; delete out.sensors; delete out.ptz;
     if (src?.switches?.length) out.switches = src.switches;
     if (src?.sensors?.length) out.sensors = src.sensors;
+    if (src?.ptz === false) out.ptz = false; // shown is the default, so only "hidden" is written
     return out;
   }
   _editExtras(i, kind, fn) {
@@ -400,36 +398,58 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     delete c.camera_entity; delete c.switches; delete c.sensors;
     this._config = c; this._render(); this._dispatch();
   }
-  // Entities a camera could use, the ones named after it first: Frigate calls
-  // its switches switch.<camera>_detect, switch.<camera>_recordings and so on.
+  // Whether a camera can be steered: PTZ buttons among its entities, or, for
+  // ONVIF set up in Frigate, what Frigate answers. That answer takes a round
+  // trip, so it is asked once and the panel redrawn when it comes back yes.
+  _ptzDetected(entity) {
+    if (!entity || !this._hass) return false;
+    const map = ptzEntityMap(camRelated(this._hass, entity));
+    if (Object.keys(map).length) return true;
+    this._ptzWs = this._ptzWs || {};
+    if (this._ptzWs[entity] === undefined) {
+      this._ptzWs[entity] = false;
+      const a = this._hass.states[entity]?.attributes || {};
+      const camera = a.camera_name || entity.replace(/^camera\./, '');
+      Promise.resolve(this._hass.callWS?.({ type: 'frigate/ptz/info', instance_id: a.client_id || a.mqtt_client_id || 'frigate', camera }))
+        .then(res => {
+          const r = parseWs(res) || {};
+          const presets = Array.isArray(r.presets) ? r.presets : Object.keys(r.presets || {});
+          if ((Array.isArray(r.features) && r.features.length) || presets.length) { this._ptzWs[entity] = true; this._render(); }
+        }).catch(() => {});
+    }
+    return this._ptzWs[entity] === true;
+  }
+  // A camera's own entities only: those on its device, or named after it. PTZ
+  // buttons are left out, since the joystick drives them.
   _extrasRow(cam, i) {
     const open = this._extrasOpen?.has(i);
     const n = (cam.switches?.length || 0) + (cam.sensors?.length || 0);
     const btn = `<button type="button" class="xt${open ? ' on' : ''}${n ? ' has' : ''}" data-toggle-extras="${i}">${open ? '▾' : '▸'} ${n ? this._t('e_extras_n', {n}) : this._t('e_extras')}</button>`;
-    if (!open) return `<div class="xr">${btn}</div>`;
+    const hasPtz = cam.ptz === false || this._ptzDetected(cam.entity);
+    const ptzOn = cam.ptz !== false && this._config?.ptz_controls !== false;
+    const ptzBox = hasPtz ? `<label class="chk-lbl" title="${this._t('e_ptz_found')}"><input type="checkbox" data-cam-ptz="${i}" ${ptzOn ? 'checked' : ''}> ${this._t('e_ptz_controls')}</label>` : '';
+    const head = `<div class="xh">${btn}${ptzBox}</div>`;
+    if (!open) return `<div class="xr">${head}</div>`;
     const states = this._hass?.states || {};
-    const key = (cam.entity || '').replace(/^camera\./, '');
-    const camAttr = states[cam.entity]?.attributes?.camera_name;
-    const mine = id => { const o = id.split('.')[1] || ''; return !!key && (o.startsWith(key) || (!!camAttr && o.startsWith(camAttr))); };
+    const related = camRelated(this._hass, cam.entity).filter(e => !ptzRole(e));
     const section = (kind, domains, title, hint, addLbl) => {
       const list = cam[kind] || [];
       const taken = new Set(list.map(x => (typeof x === 'string' ? x : x?.entity)));
-      const all = Object.keys(states).filter(e => domains.includes(e.split('.')[0]) && !taken.has(e)).sort();
+      const avail = related.filter(e => domains.includes(e.split('.')[0]) && !taken.has(e)).sort();
       const opt = e => `<option value="${e}">${states[e]?.attributes?.friendly_name ? `${states[e].attributes.friendly_name} (${e})` : e}</option>`;
-      const ownList = all.filter(mine), rest = all.filter(e => !mine(e));
       const chips = list.map((x, k) => {
         const id = typeof x === 'string' ? x : x?.entity;
         const nm = (typeof x === 'object' && x?.name) || states[id]?.attributes?.friendly_name || id;
         return `<span class="xc" title="${id}">${nm}<button type="button" data-del-ent="${i}:${kind}:${k}" title="${this._t('e_remove')}">✕</button></span>`;
       }).join('');
+      const first = !cam.entity ? this._t('e_pick_camera_first') : avail.length ? addLbl : this._t('e_none_for_camera');
       return `<div><span class="field-label">${title}</span><small class="hint">${hint}</small>
         ${chips ? `<div class="xl">${chips}</div>` : ''}
-        <select class="xa" data-add-ent="${i}:${kind}"><option value="">${addLbl}</option>
-          ${ownList.length ? `<optgroup label="${this._t('e_for_camera')}">${ownList.map(opt).join('')}</optgroup>` : ''}
-          ${rest.length ? `<optgroup label="${this._t('e_other')}">${rest.map(opt).join('')}</optgroup>` : ''}
+        <select class="xa" data-add-ent="${i}:${kind}" ${avail.length ? '' : 'disabled'}><option value="">${first}</option>
+          ${avail.map(opt).join('')}
         </select></div>`;
     };
-    return `<div class="xr">${btn}<div class="xp">
+    return `<div class="xr">${head}<div class="xp">
       ${section('switches', ['switch','input_boolean','light','fan','siren','button','input_button','script','scene'],
         this._t('e_switches'), this._t('e_switches_hint'), this._t('e_add_switch'))}
       ${section('sensors', ['sensor','binary_sensor'],
@@ -442,12 +462,13 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     const prev = this._rowCams || this._cfgCams();
     return rows.map((r, idx) => {
       const span = Number(r.querySelector('[data-cam-span]')?.value || 1);
+      const ptzBox = this.querySelector(`[data-cam-ptz="${idx}"]`);
       return this._withExtras({
         entity: r.querySelector('[data-cam-entity]')?.value || '',
         name: r.querySelector('[data-cam-name]')?.value || '',
         // Only carry a size when it is not the default, to keep configs clean.
         ...(span > 1 ? { span } : {}),
-      }, prev[idx]);
+      }, { ...prev[idx], ptz: ptzBox ? ptzBox.checked : prev[idx]?.ptz });
     });
   }
   _u() {
@@ -455,7 +476,7 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     const cams = this._getCams().filter(c => c.entity);
     const c = { ...this._config };
     // A camera with switches or sensors needs the cameras list to hold them.
-    if (cams.length > 1 || cams.some(x => x.switches || x.sensors)) { c.cameras = cams; delete c.camera_entity; delete c.switches; delete c.sensors; }
+    if (cams.length > 1 || cams.some(x => x.switches || x.sensors || x.ptz === false)) { c.cameras = cams; delete c.camera_entity; delete c.switches; delete c.sensors; }
     else if (cams.length === 1) { c.camera_entity = cams[0].entity; delete c.cameras; }
     const t=g('title'),s=g('subtitle'),w=g('window_hours'),r=g('rotate_seconds');
     if(t) c.title=t; else delete c.title;
@@ -481,7 +502,9 @@ export class FrigateModernHassCardEditor extends HTMLElement {
     const sh = this.querySelector('#stream_height')?.value;
     c.stream_height = sh ? Number(sh) : null;
     c.events_collapsed = this.querySelector('#events_collapsed')?.checked === true;
-    c.ptz_controls = this.querySelector('#ptz_controls')?.checked !== false;
+    // The joystick is now switched per camera. An old ptz_controls: false would
+    // hide it everywhere whatever those say, so ticking one lifts it.
+    if (this.querySelector('[data-cam-ptz]:checked')) delete c.ptz_controls;
     c.sidebar_separate = this.querySelector('#sidebar_separate')?.checked === true;
     c.sidebar_position = this.querySelector('input[name="sidebar_position"]:checked')?.value === 'left' ? 'left' : 'right';
     if (this._config?.grid_layout) c.grid_layout = this._config.grid_layout;
