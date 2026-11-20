@@ -7,7 +7,7 @@
  * always-visible compact latest event, camera entity picker in editor.
  * ---------------------------------------------------------------
  */
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const CARD_TAG = 'frigate-modern-hass-card';
 const DAY = 86400;
 // Smallest tile width the automatic grid will produce, in px. Below this a
@@ -88,6 +88,13 @@ function normSpan(span) {
   return { cols: 1, rows: 1 };
 }
 function mkCamState() { return { clientId:'frigate', cam:'', events:[], recordings:[], reviews:[], kept:[], discovered:false }; }
+// A camera's switches or sensors: each entry an entity id, or
+// {entity, name, icon} to override what Home Assistant calls it.
+function normEntList(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(x => (typeof x === 'string' ? { entity: x } : (x && typeof x.entity === 'string' ? { entity: x.entity, name: x.name || null, icon: x.icon || null } : null)))
+    .filter(x => x && /^[a-z_]+\.[\w]+$/.test(x.entity));
+}
 function camDisplayName(c) { return c.name || (c.entity||'').replace(/^camera\./,'').replace(/_/g,' '); }
 
 // ── main card ────────────────────────────────────────────────
@@ -262,6 +269,24 @@ const STYLES = `
   .ptz-tile .ptz-b{width:24px;height:24px;font-size:11px;border-radius:6px;}
   .ptz-tile .ptz-presets{min-height:24px;max-width:96px;font-size:10px;}
   .grid-slot:hover > .ptz-tile{display:flex;}
+  /* Switches and sensors of a camera, as chips over the top left corner. */
+  .ent-bar{position:absolute;top:10px;left:12px;right:56px;z-index:6;display:flex;flex-wrap:wrap;gap:6px;
+    align-items:flex-start;pointer-events:none;}
+  .ent-chip{pointer-events:auto;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px 0 7px;
+    border-radius:14px;border:1px solid rgba(255,255,255,.18);background:rgba(15,21,40,.62);color:#fff;
+    font:inherit;font-size:11.5px;font-weight:600;line-height:1;cursor:pointer;white-space:nowrap;max-width:100%;
+    backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);--mdc-icon-size:16px;transition:background .15s,border-color .15s,opacity .15s;}
+  .ent-chip span{overflow:hidden;text-overflow:ellipsis;}
+  .ent-chip ha-icon,.ent-chip ha-state-icon{display:flex;flex-shrink:0;}
+  .ent-chip:hover{border-color:var(--c-acc-bdr);}
+  .ent-sw.on{background:var(--c-acc);border-color:var(--c-acc);}
+  .ent-sn.on{background:rgba(239,68,68,.75);border-color:rgba(239,68,68,.9);}
+  .ent-chip.na{opacity:.5;}
+  .ent-chip.busy{opacity:.6;pointer-events:none;}
+  /* Smaller on a grid tile, where a switch is its icon alone. */
+  .ent-tile{top:5px;left:6px;right:34px;gap:4px;}
+  .ent-tile .ent-chip{height:22px;padding:0 7px 0 5px;font-size:10px;gap:3px;--mdc-icon-size:13px;}
+  .ent-tile .ent-sw{padding:0 5px;}
   .tool.on{color:var(--c-acc);}
   .grid-close-btn{position:absolute;top:6px;right:6px;width:22px;height:22px;background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:50%;font-size:11px;cursor:pointer;z-index:10;display:flex;align-items:center;justify-content:center;line-height:1;}
   .grid-close-btn:hover{background:rgba(239,68,68,.7);}
@@ -492,6 +517,8 @@ const STRINGS = {
     calendar: 'Calendar',
     timeline_hint: 'Drag · scroll=zoom · Shift+scroll=pan',
     now: 'now',
+    unavailable: 'Unavailable',
+    action_failed: 'Could not change it',
     ptz: 'PTZ controls',
     ptz_up: 'Up',
     ptz_down: 'Down',
@@ -619,6 +646,16 @@ const STRINGS = {
     e_ptz_controls: 'Show PTZ controls',
     e_ptz_controls_hint: 'Cameras with ONVIF set up in Frigate get a pad to pan, tilt, zoom and recall presets. Cameras without PTZ show nothing.',
     e_window_hours: 'Window hours',
+    e_extras: 'Buttons and sensors',
+    e_extras_n: '{n} buttons/sensors',
+    e_switches: 'Buttons',
+    e_switches_hint: 'Switches, lights, scripts... A tap toggles or runs them.',
+    e_sensors: 'Sensors',
+    e_sensors_hint: 'Shown as values over the picture. A tap opens their history.',
+    e_add_switch: '+ Add a button…',
+    e_add_sensor: '+ Add a sensor…',
+    e_for_camera: 'For this camera',
+    e_other: 'Other',
     e_fits_count: 'fits the<br>camera count',
     // grid layout names
     layouts: {
@@ -651,6 +688,8 @@ const STRINGS = {
     calendar: 'Calendario',
     timeline_hint: 'Trascina · scroll=zoom · Maiusc+scroll=sposta',
     now: 'ora',
+    unavailable: 'Non disponibile',
+    action_failed: 'Impossibile modificarlo',
     ptz: 'Controlli PTZ',
     ptz_up: 'Su',
     ptz_down: 'Giù',
@@ -771,6 +810,16 @@ const STRINGS = {
     e_ptz_controls: 'Mostra i controlli PTZ',
     e_ptz_controls_hint: 'Le telecamere con ONVIF configurato in Frigate hanno un pad per muovere, inclinare, fare zoom e richiamare i preset. Le telecamere senza PTZ non mostrano nulla.',
     e_window_hours: 'Ore visualizzate',
+    e_extras: 'Pulsanti e sensori',
+    e_extras_n: '{n} pulsanti/sensori',
+    e_switches: 'Pulsanti',
+    e_switches_hint: 'Switch, luci, script... Un tocco li accende/spegne o li avvia.',
+    e_sensors: 'Sensori',
+    e_sensors_hint: 'Mostrati come valori sopra l’immagine. Un tocco apre lo storico.',
+    e_add_switch: '+ Aggiungi un pulsante…',
+    e_add_sensor: '+ Aggiungi un sensore…',
+    e_for_camera: 'Per questa telecamera',
+    e_other: 'Altri',
     e_fits_count: 'si adatta al<br>numero di telecamere',
     layouts: {
       'auto': 'Automatico', '2-row': '2 in colonna', '2-col': '2 affiancate',
@@ -1541,9 +1590,11 @@ class FrigateModernHassCard extends HTMLElement {
   setConfig(config) {
     let cameras;
     if (config.cameras && Array.isArray(config.cameras) && config.cameras.length)
-      cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span) }));
+      cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span),
+        switches:normEntList(c.switches), sensors:normEntList(c.sensors) }));
     else if (config.camera_entity)
-      cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan() }];
+      cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan(),
+        switches:normEntList(config.switches), sensors:normEntList(config.sensors) }];
     else throw new Error('camera_entity or cameras[] required');
 
     this._config = {
@@ -1631,6 +1682,7 @@ class FrigateModernHassCard extends HTMLElement {
       }
     }
     this._syncStatus();
+    this._refreshEntBars();
     if (this._config.theme === 'auto') this._applyCardStyle(); // re-evaluate HA dark mode
   }
 
@@ -2217,6 +2269,7 @@ class FrigateModernHassCard extends HTMLElement {
         const lbl = document.createElement('div');
         lbl.className = 'grid-label'; lbl.textContent = name;
         slot.appendChild(lbl);
+        this._addTileEnts(slot, i);
         this._addTilePtz(slot, c.entity);
         // Click → open this camera in single view (_switchCamera switches the
         // view mode itself). Leave wall-display fullscreen first, otherwise we
@@ -2224,7 +2277,7 @@ class FrigateModernHassCard extends HTMLElement {
         // Guard: buttons inside the slot handle their own action (a clip played
         // in-slot renders its own close/fullscreen buttons); don't also switch.
         slot.addEventListener('click', ev => {
-          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot],.ptz')) return;
+          if (ev.target.closest('.grid-fs-btn,.grid-close-btn,[data-restore-slot],.ptz,.ent-bar')) return;
           if (!this._ready) return; // still the placeholder tiles
           this._exitFullscreen();
           this._switchCamera(i); this._renderCamSwitcher();
@@ -2387,6 +2440,7 @@ class FrigateModernHassCard extends HTMLElement {
     }
     this._renderStreamCtrl();
     this._updatePtz();
+    this._renderEntBar();
     this._renderCamSwitcher();
     this._applyBrowse();
     this.shadowRoot.querySelectorAll('[data-viewmode]').forEach(p =>
@@ -2486,6 +2540,115 @@ class FrigateModernHassCard extends HTMLElement {
     });
   }
 
+  // ── switches and sensors ──────────────────────────────────
+  // Each camera can carry a few entities of its own: switches (Frigate's
+  // detect/recordings/snapshots, a light, a siren...) shown as buttons that
+  // toggle, and sensors shown as read-only chips. They sit over the top left
+  // corner of the picture, in the single view and on every grid tile.
+  _entIcon(id, st, cfgIcon) {
+    if (cfgIcon) return `<ha-icon icon="${cfgIcon}"></ha-icon>`;
+    if (st && customElements.get('ha-state-icon')) return `<ha-state-icon data-icon-for="${id}"></ha-state-icon>`;
+    if (st?.attributes?.icon) return `<ha-icon icon="${st.attributes.icon}"></ha-icon>`;
+    const on = st?.state === 'on';
+    const d = id.split('.')[0];
+    const icon = ({
+      switch: on ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline',
+      input_boolean: on ? 'mdi:toggle-switch' : 'mdi:toggle-switch-off-outline',
+      light: on ? 'mdi:lightbulb' : 'mdi:lightbulb-outline',
+      fan: 'mdi:fan', siren: 'mdi:bullhorn', button: 'mdi:gesture-tap-button',
+      input_button: 'mdi:gesture-tap-button', script: 'mdi:script-text', scene: 'mdi:palette',
+      binary_sensor: on ? 'mdi:checkbox-marked-circle' : 'mdi:checkbox-blank-circle-outline',
+    })[d] || 'mdi:eye';
+    return `<ha-icon icon="${icon}"></ha-icon>`;
+  }
+  // A Frigate switch is called "Front Door Detect"; on a chip over the front
+  // door camera "Detect" is all that needs saying.
+  _entName(item, st, cam) {
+    if (item.name) return item.name;
+    let n = st?.attributes?.friendly_name || item.entity.split('.')[1].replace(/_/g, ' ');
+    const camName = this._hass?.states[cam.entity]?.attributes?.friendly_name || camDisplayName(cam);
+    if (camName && n.toLowerCase().startsWith(camName.toLowerCase() + ' ')) n = n.slice(camName.length + 1);
+    return cap(n);
+  }
+  _entValue(st) {
+    if (!st) return '';
+    try { if (this._hass.formatEntityState) return this._hass.formatEntityState(st); } catch (_) {}
+    const u = st.attributes?.unit_of_measurement;
+    return u ? `${st.state} ${u}` : st.state;
+  }
+  _esc(v) { return String(v ?? '').replace(/[&<>"]/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' })[ch]); }
+  // Fills one bar. `compact` is a grid tile: switches lose their label there,
+  // the name stays in the tooltip. Only redrawn when something it shows changed,
+  // since hass updates arrive many times a second.
+  _fillEntBar(bar, camIdx, compact) {
+    const cam = this._config.cameras[camIdx];
+    const items = cam ? [...(cam.sensors || []).map(x => ({ ...x, kind: 'sensor' })),
+                         ...(cam.switches || []).map(x => ({ ...x, kind: 'switch' }))] : [];
+    const states = this._hass?.states || {};
+    const sig = items.map(x => { const st = states[x.entity]; return x.entity + '=' + (st ? st.state + '|' + st.last_updated : '-'); }).join(';')
+      + '|' + this._shellLang;
+    if (bar._sig === sig && bar.dataset.cam === String(camIdx)) return items.length > 0;
+    bar._sig = sig; bar.dataset.cam = String(camIdx);
+    bar.innerHTML = items.map(x => {
+      const st = states[x.entity];
+      const na = !st || st.state === 'unavailable' || st.state === 'unknown';
+      const name = this._entName(x, st, cam);
+      const on = st && ['on', 'open', 'detected', 'home', 'playing'].includes(st.state);
+      const icon = this._entIcon(x.entity, st, x.icon);
+      if (x.kind === 'switch') {
+        return `<button class="ent-chip ent-sw${on ? ' on' : ''}${na ? ' na' : ''}" data-ent="${this._esc(x.entity)}" data-kind="switch"
+          title="${this._esc(name)}: ${this._esc(this._entValue(st) || this._t('unavailable'))}">${icon}${compact ? '' : `<span>${this._esc(name)}</span>`}</button>`;
+      }
+      // A binary sensor says what it is and shows its state by colour; a value
+      // alone ("2") needs the name beside it unless space is short.
+      const isBinary = x.entity.startsWith('binary_sensor.');
+      const val = st ? this._entValue(st) : this._t('unavailable');
+      return `<button class="ent-chip ent-sn${isBinary && on ? ' on' : ''}${na ? ' na' : ''}" data-ent="${this._esc(x.entity)}" data-kind="sensor"
+        title="${this._esc(name)}: ${this._esc(val)}">${icon}<span>${this._esc(isBinary ? name : compact ? val : `${name} ${val}`)}</span></button>`;
+    }).join('');
+    bar.querySelectorAll('ha-state-icon[data-icon-for]').forEach(el => {
+      el.hass = this._hass; el.stateObj = states[el.dataset.iconFor];
+    });
+    return items.length > 0;
+  }
+  _renderEntBar() {
+    const bar = this._$('#ent-bar'); if (!bar) return;
+    const show = this._viewMode === 'single' && !this._playing
+      && this._fillEntBar(bar, this._config.cameras.indexOf(this._activeCam), false);
+    bar.style.display = show ? 'flex' : 'none';
+  }
+  _addTileEnts(slot, idx) {
+    if (!slot || slot.querySelector(':scope > .ent-bar')) return;
+    const bar = document.createElement('div');
+    bar.className = 'ent-bar ent-tile';
+    if (this._fillEntBar(bar, idx, true)) slot.appendChild(bar);
+  }
+  _refreshEntBars() {
+    if (!this._config?.cameras.some(c => c.switches.length || c.sensors.length)) return;
+    if (this._viewMode === 'single') this._renderEntBar();
+    this.shadowRoot.querySelectorAll('#cam-grid .ent-tile').forEach(bar => {
+      this._fillEntBar(bar, Number(bar.dataset.cam), true);
+    });
+  }
+  // A switch toggles; buttons, scripts and scenes run. A sensor has nothing to
+  // do, so it opens Home Assistant's own dialog with its history.
+  _entAction(btn) {
+    const id = btn.dataset.ent;
+    if (btn.dataset.kind !== 'switch') {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: id } }));
+      return;
+    }
+    const d = id.split('.')[0];
+    const [domain, service] = ({
+      button: ['button', 'press'], input_button: ['input_button', 'press'],
+      script: ['script', 'turn_on'], scene: ['scene', 'turn_on'],
+    })[d] || ['homeassistant', 'toggle'];
+    btn.classList.add('busy');
+    this._hass.callService(domain, service, { entity_id: id })
+      .catch(err => { console.warn('[frigate-card] toggle failed', err); this._toast(this._t('action_failed')); })
+      .finally(() => setTimeout(() => btn.classList.remove('busy'), 600));
+  }
+
   // ── camera switching ──────────────────────────────────────
   async _switchCamera(idx) {
     if (idx === this._activeCamIdx && this._viewMode === 'single') return;
@@ -2508,6 +2671,7 @@ class FrigateModernHassCard extends HTMLElement {
     this._events = cached.events||[]; this._recordings = cached.recordings||[];
     this._reviews = cached.reviews||[]; this._kept = cached.kept||[];
     this._renderCamSwitcher(); this._syncStatus();
+    this._renderEntBar();
     this._loadPtz();
     await mounting;
     this._renderAll();
@@ -2633,6 +2797,7 @@ class FrigateModernHassCard extends HTMLElement {
                 <div id="engine"><div class="ph">${ICONS.live}<span>${this._t('connecting')}</span></div></div>
                 <div class="viewer" id="viewer" style="display:none"></div>
                 <div class="ptz" id="ptz"></div>
+                <div class="ent-bar" id="ent-bar" style="display:none"></div>
 <div class="feed-top" id="feed-top" style="display:none">
                   <button class="btn back" id="back">${ICONS.back}<span>${this._t('live')}</span></button>
                 </div>
@@ -2834,6 +2999,8 @@ class FrigateModernHassCard extends HTMLElement {
     if (e.target.closest('#sc-events')) return this._toggleEvents();
     if (e.target.closest('#sc-ptz')) { this._ptzOpen = !this._ptzOpen; this._renderStreamCtrl(); this._updatePtz(); return; }
     if (e.target.closest('#rotate-btn')) return this._toggleRotate();
+    const entBtn = e.target.closest('[data-ent]');
+    if (entBtn) { e.stopPropagation(); return this._entAction(entBtn); }
     if (e.target.closest('[data-mark-all]')) return this._markAll();
     if (e.target.closest('[data-toggle-reviewed]')) { this._showReviewed=!this._showReviewed; this._renderList(); return; }
 
@@ -2907,6 +3074,7 @@ class FrigateModernHassCard extends HTMLElement {
     slot.insertAdjacentHTML('afterbegin', '<div class="ph"><div class="ph-spin"></div></div>');
     if (this._config.live_provider === 'go2rtc') this._mountGridGo2rtc(slot, cam.entity);
     else this._mountGridHaStream(slot, cam.entity);
+    this._addTileEnts(slot, idx);
     this._addTilePtz(slot, cam.entity);
   }
   // Play clip/snapshot inside the matching grid slot (stays in grid mode)
@@ -2952,7 +3120,8 @@ class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#engine').style.display='none';
     const v=this.shadowRoot.querySelector('#viewer'); v.style.display='flex';
     this.shadowRoot.querySelector('#feed-top').style.display='flex';
-    const pad=this.shadowRoot.querySelector('#ptz'); if(pad) pad.style.display='none';
+    const pad=this._$('#ptz'); if(pad) pad.style.display='none';
+    const ents=this._$('#ent-bar'); if(ents) ents.style.display='none';
   }
   _showLive() {
     this._playing=null;
@@ -2961,6 +3130,7 @@ class FrigateModernHassCard extends HTMLElement {
     this.shadowRoot.querySelector('#feed-top').style.display='none';
     this._renderStreamCtrl();
     this._updatePtz();
+    this._renderEntBar();
     this._revokeClipBlob();
   }
   _revokeClipBlob() {
@@ -3568,9 +3738,10 @@ class FrigateModernHassCardEditor extends HTMLElement {
     const allCamEntities = this._hass ? Object.keys(this._hass.states).filter(e=>e.startsWith('camera.')).sort() : [];
     const entityList = frigEntities.length ? frigEntities : allCamEntities;
 
-    const cams = this._config?.cameras
-      ? this._config.cameras
-      : (this._config?.camera_entity ? [{ entity: this._config.camera_entity, name: '' }] : [{ entity: '', name: '' }]);
+    const cams = this._cfgCams();
+    // The rows drawn below, in order. _getCams reads each row's switches and
+    // sensors from here, since the config may have dropped an empty row since.
+    this._rowCams = cams;
 
     const opts = (sel) => entityList.map(e => `<option value="${e}" ${e===sel?'selected':''}>${e}</option>`).join('');
 
@@ -3598,7 +3769,8 @@ class FrigateModernHassCardEditor extends HTMLElement {
           ${[1,2,3].map(v => `<option value="${v}" ${Number(c.span?.cols ?? c.span ?? 1)===v?'selected':''}>${v}x${v}</option>`).join('')}
         </select>`}
         ${cams.length > 1 ? `<button class="xb" data-remove-cam="${i}" title="${this._t('e_remove')}">✕</button>` : ''}
-      </div>`).join('');
+      </div>
+      ${this._extrasRow(c, i)}`).join('');
 
     const hiddenTabs = new Set(this._config?.hidden_tabs || []);
     const tabCheck = (id, label) => `<label class="chk-lbl">
@@ -3651,6 +3823,17 @@ class FrigateModernHassCardEditor extends HTMLElement {
       .lay.sel .lay-prev span{background:var(--ed-acc);color:var(--text-primary-color,#fff);}
       .lay-auto{width:100%;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;
         color:var(--ed-dim);font-size:10px;text-align:center;border:1px dashed var(--ed-line);border-radius:4px;}
+      .xr{margin:-2px 0 8px 31px;}
+      .xt{padding:3px 9px;border:1px dashed var(--ed-line);background:transparent;color:var(--ed-dim);
+        border-radius:6px;cursor:pointer;font-size:11px;}
+      .xt.on,.xt.has{border-style:solid;border-color:var(--ed-acc);color:var(--ed-acc);}
+      .xp{margin-top:6px;padding:8px;border:1px solid var(--ed-line);border-radius:8px;display:flex;flex-direction:column;gap:8px;}
+      .xl{display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 5px;}
+      .xc{display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;border-radius:12px;font-size:11px;
+        background:rgba(128,128,128,.15);border:1px solid var(--ed-line);}
+      .xc button{border:none;background:transparent;color:var(--error-color,#b91c1c);cursor:pointer;font-size:11px;padding:0 3px;}
+      .xa{width:100%;padding:6px;border:1px solid var(--ed-line);border-radius:6px;font-size:12px;
+        background:var(--ed-field);color:var(--primary-text-color,#111);box-sizing:border-box;}
       .lay-lbl{font-size:10px;color:var(--primary-text-color,#374151);text-align:center;line-height:1.2;}
     </style>
     <div class="ed-wrap">
@@ -3808,6 +3991,7 @@ class FrigateModernHassCardEditor extends HTMLElement {
     });
     this.querySelectorAll('[data-remove-cam]').forEach(b => b.addEventListener('click', e => {
       const cur = this._getCams(); cur.splice(Number(e.currentTarget.dataset.removeCam), 1);
+      this._extrasOpen = new Set();
       this._config = { ...this._config, cameras: cur }; delete this._config.camera_entity; this._render(); this._dispatch();
     }));
     this.querySelector('#toggle-layout')?.addEventListener('click', () => {
@@ -3827,14 +4011,31 @@ class FrigateModernHassCardEditor extends HTMLElement {
       ev.stopImmediatePropagation();
       const cur = this._getCams(); // keeps the sizes, which belong to the tile
       const nameOf = k => before[k]?.name || '';
-      cur[i] = { ...cur[i], entity: picked, name: nameOf(j) };
-      cur[j] = { ...cur[j], entity: before[i]?.entity || '', name: nameOf(i) };
+      // Switches and sensors belong to the camera, so they move with it.
+      const extrasOf = k => ({ switches: before[k]?.switches, sensors: before[k]?.sensors });
+      cur[i] = this._withExtras({ ...cur[i], entity: picked, name: nameOf(j) }, extrasOf(j));
+      cur[j] = this._withExtras({ ...cur[j], entity: before[i]?.entity || '', name: nameOf(i) }, extrasOf(i));
       this._config = { ...this._config, cameras: cur }; delete this._config.camera_entity;
       this._render(); this._dispatch();
     }));
     this.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => {
       this._config = { ...this._config, grid_layout: b.dataset.layout };
       this._render(); this._dispatch();
+    }));
+    this.querySelectorAll('[data-toggle-extras]').forEach(b => b.addEventListener('click', () => {
+      const i = Number(b.dataset.toggleExtras);
+      this._extrasOpen = this._extrasOpen || new Set();
+      if (this._extrasOpen.has(i)) this._extrasOpen.delete(i); else this._extrasOpen.add(i);
+      this._render();
+    }));
+    this.querySelectorAll('[data-add-ent]').forEach(el => el.addEventListener('change', ev => {
+      ev.stopImmediatePropagation();
+      const [i, kind] = el.dataset.addEnt.split(':');
+      if (el.value) this._editExtras(Number(i), kind, list => list.concat(el.value));
+    }));
+    this.querySelectorAll('[data-del-ent]').forEach(b => b.addEventListener('click', () => {
+      const [i, kind, k] = b.dataset.delEnt.split(':');
+      this._editExtras(Number(i), kind, list => list.filter((_, n) => n !== Number(k)));
     }));
     this.querySelectorAll('select,input').forEach(el => el.addEventListener('change', () => this._u()));
     // The custom colour section is hidden while the card follows the HA theme.
@@ -3882,23 +4083,85 @@ class FrigateModernHassCardEditor extends HTMLElement {
       <div class="lay-lbl">${this._layoutName(l)}</div></button>`;
   }
 
+  // The cameras as the config has them now. A single camera may still be in
+  // the camera_entity shorthand, with its switches and sensors at the top level.
+  _cfgCams() {
+    const c = this._config || {};
+    if (Array.isArray(c.cameras) && c.cameras.length) return c.cameras;
+    return [{ entity: c.camera_entity || '', name: '', switches: c.switches, sensors: c.sensors }];
+  }
+  _withExtras(cam, src) {
+    const out = { ...cam };
+    delete out.switches; delete out.sensors;
+    if (src?.switches?.length) out.switches = src.switches;
+    if (src?.sensors?.length) out.sensors = src.sensors;
+    return out;
+  }
+  _editExtras(i, kind, fn) {
+    const cur = this._getCams();
+    if (!cur[i]) return;
+    const list = fn([...(cur[i][kind] || [])]);
+    cur[i] = this._withExtras(cur[i], { ...cur[i], [kind]: list });
+    const c = { ...this._config, cameras: cur };
+    delete c.camera_entity; delete c.switches; delete c.sensors;
+    this._config = c; this._render(); this._dispatch();
+  }
+  // Entities a camera could use, the ones named after it first: Frigate calls
+  // its switches switch.<camera>_detect, switch.<camera>_recordings and so on.
+  _extrasRow(cam, i) {
+    const open = this._extrasOpen?.has(i);
+    const n = (cam.switches?.length || 0) + (cam.sensors?.length || 0);
+    const btn = `<button type="button" class="xt${open ? ' on' : ''}${n ? ' has' : ''}" data-toggle-extras="${i}">${open ? '▾' : '▸'} ${n ? this._t('e_extras_n', {n}) : this._t('e_extras')}</button>`;
+    if (!open) return `<div class="xr">${btn}</div>`;
+    const states = this._hass?.states || {};
+    const key = (cam.entity || '').replace(/^camera\./, '');
+    const camAttr = states[cam.entity]?.attributes?.camera_name;
+    const mine = id => { const o = id.split('.')[1] || ''; return !!key && (o.startsWith(key) || (!!camAttr && o.startsWith(camAttr))); };
+    const section = (kind, domains, title, hint, addLbl) => {
+      const list = cam[kind] || [];
+      const taken = new Set(list.map(x => (typeof x === 'string' ? x : x?.entity)));
+      const all = Object.keys(states).filter(e => domains.includes(e.split('.')[0]) && !taken.has(e)).sort();
+      const opt = e => `<option value="${e}">${states[e]?.attributes?.friendly_name ? `${states[e].attributes.friendly_name} (${e})` : e}</option>`;
+      const ownList = all.filter(mine), rest = all.filter(e => !mine(e));
+      const chips = list.map((x, k) => {
+        const id = typeof x === 'string' ? x : x?.entity;
+        const nm = (typeof x === 'object' && x?.name) || states[id]?.attributes?.friendly_name || id;
+        return `<span class="xc" title="${id}">${nm}<button type="button" data-del-ent="${i}:${kind}:${k}" title="${this._t('e_remove')}">✕</button></span>`;
+      }).join('');
+      return `<div><span class="field-label">${title}</span><small class="hint">${hint}</small>
+        ${chips ? `<div class="xl">${chips}</div>` : ''}
+        <select class="xa" data-add-ent="${i}:${kind}"><option value="">${addLbl}</option>
+          ${ownList.length ? `<optgroup label="${this._t('e_for_camera')}">${ownList.map(opt).join('')}</optgroup>` : ''}
+          ${rest.length ? `<optgroup label="${this._t('e_other')}">${rest.map(opt).join('')}</optgroup>` : ''}
+        </select></div>`;
+    };
+    return `<div class="xr">${btn}<div class="xp">
+      ${section('switches', ['switch','input_boolean','light','fan','siren','button','input_button','script','scene'],
+        this._t('e_switches'), this._t('e_switches_hint'), this._t('e_add_switch'))}
+      ${section('sensors', ['sensor','binary_sensor'],
+        this._t('e_sensors'), this._t('e_sensors_hint'), this._t('e_add_sensor'))}
+    </div></div>`;
+  }
+
   _getCams() {
     const rows = [...this.querySelectorAll('[data-row]')];
-    return rows.map(r => {
+    const prev = this._rowCams || this._cfgCams();
+    return rows.map((r, idx) => {
       const span = Number(r.querySelector('[data-cam-span]')?.value || 1);
-      return {
+      return this._withExtras({
         entity: r.querySelector('[data-cam-entity]')?.value || '',
         name: r.querySelector('[data-cam-name]')?.value || '',
         // Only carry a size when it is not the default, to keep configs clean.
         ...(span > 1 ? { span } : {}),
-      };
+      }, prev[idx]);
     });
   }
   _u() {
     const g = id => this.querySelector('#'+id)?.value?.trim() || '';
     const cams = this._getCams().filter(c => c.entity);
     const c = { ...this._config };
-    if (cams.length > 1) { c.cameras = cams; delete c.camera_entity; }
+    // A camera with switches or sensors needs the cameras list to hold them.
+    if (cams.length > 1 || cams.some(x => x.switches || x.sensors)) { c.cameras = cams; delete c.camera_entity; delete c.switches; delete c.sensors; }
     else if (cams.length === 1) { c.camera_entity = cams[0].entity; delete c.cameras; }
     const t=g('title'),s=g('subtitle'),w=g('window_hours'),r=g('rotate_seconds');
     if(t) c.title=t; else delete c.title;

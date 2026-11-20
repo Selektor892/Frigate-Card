@@ -69,7 +69,9 @@ def check_config_options(source):
         return
     block = source.split(marker, 1)[1].split(chr(10) + '    };', 1)[0]
     accepted = set(re.findall(r'^\s{6}(\w+):', block, re.M))
-    accepted |= {'cameras', 'camera_entity', 'entity'}  # entity belongs to a camera row
+    # entity belongs to a camera row; switches and sensors to a camera too, and
+    # setConfig reads them at the top level for the camera_entity shorthand.
+    accepted |= {'cameras', 'camera_entity', 'entity', 'switches', 'sensors'}
     written = set(re.findall(r'c\.(\w+)\s*=', source))
     written |= set(re.findall(r'delete c\.(\w+)', source))
     missing = sorted(written - accepted)

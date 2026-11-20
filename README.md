@@ -22,6 +22,7 @@ A modern, feature-rich Lovelace card for [Frigate NVR](https://frigate.video) in
 - **Responsive layout**: wide mode shows stream + events side-by-side
 - **Theming**: dark / light / auto, custom accent + background colour picker
 - **Auto-rotate**: configurable interval rotation across cameras
+- **Switches and sensors**: per-camera buttons (Frigate detect/recordings, lights, scripts...) and sensor values over the picture
 
 ## Installation via HACS
 
@@ -74,7 +75,7 @@ default_view: single     # or 'grid'
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `camera_entity` | string | none | Single camera entity (shorthand) |
-| `cameras` | list | none | List of `{entity, name, span}` objects. `span` makes a camera occupy several tiles |
+| `cameras` | list | none | List of `{entity, name, span, switches, sensors}` objects. `span` makes a camera occupy several tiles |
 | `title` | string | none | Card title |
 | `subtitle` | string | none | Card subtitle |
 | `default_view` | string | `single` | `single` or `grid` |
@@ -147,6 +148,32 @@ cameras:
   - entity: camera.garden
   - entity: camera.shed
 ```
+
+### Switches and sensors
+
+Each camera can show its own buttons and sensor values, as chips over the top left
+corner of the picture, in the single view and on its grid tile. A tap on a button
+toggles it (switches, lights, input booleans) or runs it (buttons, scripts, scenes);
+a tap on a sensor opens its history.
+
+In the visual editor, open **Buttons and sensors** under a camera: entities named
+after that camera, like Frigate's `switch.<camera>_detect`, are listed first.
+
+```yaml
+cameras:
+  - entity: camera.front_door
+    switches:
+      - switch.front_door_detect
+      - switch.front_door_recordings
+      - entity: light.porch
+        name: Porch          # optional, overrides the name
+        icon: mdi:lightbulb  # optional, overrides the icon
+    sensors:
+      - sensor.front_door_person_count
+      - binary_sensor.front_door_motion
+```
+
+With a single `camera_entity`, `switches` and `sensors` can go at the top level.
 
 ### Events panel
 
