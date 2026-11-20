@@ -1,14 +1,17 @@
 # Frigate Modern Hass Card
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/release/QuadNL/frigate-modern-hass-card.svg)](https://github.com/QuadNL/frigate-modern-hass-card/releases)
+[![GitHub Release](https://img.shields.io/github/release/Selektor892/Frigate-Card.svg)](https://github.com/Selektor892/Frigate-Card/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Ko-Fi][ko_fi_shield]][ko_fi]
 
 > **AI Assistance Notice**
 > This card was built with the help of an AI coding assistant. All code has been personally reviewed, tested on a real Frigate setup, and is actively maintained. Found a bug or have a suggestion? Open an issue on GitHub.
 
 A modern, feature-rich Lovelace card for [Frigate NVR](https://frigate.video) in Home Assistant.
+
+> **Based on [Frigate Modern Hass Card](https://github.com/QuadNL/frigate-modern-hass-card) by QuadNL.**
+> This is an extended version maintained by Selektor892, with additions such as
+> per-camera switches and sensors. It is not the official release of the original card.
 
 ## Features
 
@@ -28,15 +31,14 @@ A modern, feature-rich Lovelace card for [Frigate NVR](https://frigate.video) in
 
 1. Open HACS → Frontend
 2. Click ⋮ → Custom repositories
-3. Add `https://github.com/QuadNL/frigate-modern-hass-card` as type **Dashboard**
+3. Add `https://github.com/Selektor892/Frigate-Card` as type **Dashboard**
 4. Install "Frigate Modern Hass Card"
 5. Hard-refresh your browser
 
-> Once the repo is accepted in the HACS default store, you'll find it directly under HACS → Frontend without adding a custom repository.
 
 ## Manual Installation
 
-Download `frigate-modern-hass-card.js` from the [latest release](https://github.com/QuadNL/frigate-modern-hass-card/releases/latest) and place it in your `config/www/` folder.
+Download `frigate-modern-hass-card.js` from the [latest release](https://github.com/Selektor892/Frigate-Card/releases/latest) and place it in your `config/www/` folder.
 
 Add to your Lovelace resources:
 ```yaml
@@ -227,15 +229,18 @@ go2rtc_mode: webrtc   # only worth trying on a local network
 - [Frigate NVR](https://frigate.video) with the [Frigate Home Assistant integration](https://github.com/blakeblackshear/frigate-hass-integration)
 - Home Assistant 2023.x or later
 
-## Support
+## Credits
 
-If you like this card; why don't buy me a coffee? 😊
+This card is built on [Frigate Modern Hass Card](https://github.com/QuadNL/frigate-modern-hass-card)
+by **QuadNL**, who wrote the original. If you like it, consider supporting the
+original author:
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/U2W120MCVZ)
 
-[ko_fi_shield]: https://img.shields.io/static/v1.svg?label=%20&message=Ko-Fi&color=F16061&logo=ko-fi&logoColor=white
-[ko_fi]: https://ko-fi.com/U2W120MCVZ
+The low-latency player is [go2rtc](https://github.com/AlexxIT/go2rtc)'s `video-rtc.js`
+by Alexey Khit, included unmodified under the MIT License.
+
 
 
 ## License
 
-MIT © QuadNL
+MIT © QuadNL (original card), Selektor892 (modifications and extensions). See [LICENSE](LICENSE).
