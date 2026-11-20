@@ -1,7 +1,7 @@
 // card.js — main FrigateModernHassCard custom element
 import { VERSION, CARD_TAG, DAY, DEFAULT_ROTATE_S, ICONS, cap, parseWs,
          labelColor, CAM_COLORS, MIN_TILE_PX, PHONE_PX, normSpan, findLayout, mkCamState, camDisplayName,
-         normEntList } from './constants.js';
+         normEntList, camRelated, ptzEntityMap } from './constants.js';
 import { STYLES } from './styles.js';
 import { t, langOf } from './i18n.js';
 
@@ -31,6 +31,7 @@ export class FrigateModernHassCard extends HTMLElement {
     this._streamMuted = true; // initial live-view mute state; never changed after mount (see _mountEngine)
     this._showReviewed = false; // reviews: hide reviewed by default
     this._domCache = {}; // querySelector result cache — cleared on re-render
+    this._ptzOpen = true; // the joystick shows by itself; the toolbar button hides it
   }
 
   static getConfigElement() { return document.createElement(CARD_TAG+'-editor'); }
@@ -40,10 +41,10 @@ export class FrigateModernHassCard extends HTMLElement {
     let cameras;
     if (config.cameras && Array.isArray(config.cameras) && config.cameras.length)
       cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span),
-        switches:normEntList(c.switches), sensors:normEntList(c.sensors) }));
+        switches:normEntList(c.switches), sensors:normEntList(c.sensors), ptz:c.ptz !== false }));
     else if (config.camera_entity)
       cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan(),
-        switches:normEntList(config.switches), sensors:normEntList(config.sensors) }];
+        switches:normEntList(config.switches), sensors:normEntList(config.sensors), ptz:config.ptz !== false }];
     else throw new Error('camera_entity or cameras[] required');
 
     this._config = {
@@ -839,8 +840,8 @@ export class FrigateModernHassCard extends HTMLElement {
     const events = `<button class="tool" id="sc-events"></button>`;
     // Only offered for a camera Frigate says can move, and only in the single
     // view: the pad acts on one camera.
-    const ptz = (this._config.ptz_controls && !inGrid && this._cc().ptz)
-      ? `<button class="tool${this._ptzOpen ? ' on' : ''}" id="sc-ptz" title="${this._t('ptz')}">${ICONS.ptz}</button>` : '';
+    const ptz = (!inGrid && this._ptzFor(this._activeCam?.entity))
+      ? `<button class="tool${this._ptzOpen ? ' on' : ''}" id="sc-ptz" title="${this._ptzOpen ? this._t('hide_ptz') : this._t('show_ptz')}">${ICONS.ptz}</button>` : '';
     bar.innerHTML = `${ptz}${grid}${fs}${events}`;
     this._applyEventsCollapsed();
   }
@@ -908,16 +909,35 @@ export class FrigateModernHassCard extends HTMLElement {
       .map(p => (typeof p === 'string' ? p : p?.name)).filter(Boolean);
     if (!features.length && !presets.length) return null;
     return {
+      via: 'frigate',
       pan: features.some(f => String(f).startsWith('pt')) || !features.length,
       zoom: features.some(f => String(f).startsWith('zoom')) || !features.length,
       presets,
     };
   }
-  // A grid tile's pad. It shows on hover (CSS) and only on a tile that is
+  // A camera Frigate cannot steer (no ONVIF in Frigate) may still have PTZ
+  // buttons from its own integration. Those drive the same joystick.
+  _ptzFromEntities(entity) {
+    const map = ptzEntityMap(camRelated(this._hass, entity));
+    const pan = ['up', 'down', 'left', 'right'].some(k => map[k]);
+    const zoom = !!(map.zoom_in || map.zoom_out);
+    const presets = map.preset ? (this._hass.states[map.preset]?.attributes?.options || []) : [];
+    if (!pan && !zoom && !presets.length) return null;
+    return { via: 'entities', pan, zoom, presets, map };
+  }
+  // The capabilities to show for a camera, or null when it has none or its PTZ
+  // is switched off (for all cameras with ptz_controls, or for this one).
+  _ptzFor(entity) {
+    if (!this._config.ptz_controls || !entity) return null;
+    const cam = this._config.cameras.find(c => c.entity === entity);
+    if (cam && cam.ptz === false) return null;
+    return this._camCache[entity]?.ptz || null;
+  }
+  // A grid tile's joystick. It shows on hover (CSS) and only on a tile that is
   // showing the live picture, not one playing a clip.
   _addTilePtz(slot, entity) {
-    const caps = this._camCache[entity]?.ptz;
-    if (!this._config.ptz_controls || !caps || !slot || slot.querySelector(':scope > .ptz')) return;
+    const caps = this._ptzFor(entity);
+    if (!caps || !slot || slot.querySelector(':scope > .ptz')) return;
     const pad = document.createElement('div');
     pad.className = 'ptz ptz-tile';
     this._fillPtz(pad, caps, entity);
@@ -937,44 +957,68 @@ export class FrigateModernHassCard extends HTMLElement {
     if (cc.ptz === undefined) {
       try { cc.ptz = this._ptzCaps(await this._ws({ type:'frigate/ptz/info', instance_id:cc.clientId, camera:cc.cam })); }
       catch (_) { cc.ptz = null; }
+      if (!cc.ptz) cc.ptz = this._ptzFromEntities(ent);
     }
     if (this._viewMode === 'grid') this._refreshTilePtz(ent);
     if (this._activeCam?.entity === ent) { this._renderStreamCtrl(); this._updatePtz(); }
   }
+  // action: move (argument up/down/left/right), zoom (in/out), stop, preset.
   _ptzSend(action, argument, entity = this._activeCam?.entity) {
     if (!entity) return;
+    const caps = this._camCache[entity]?.ptz;
+    const fail = err => console.warn('[frigate-card] ptz failed', err);
+    if (caps?.via === 'entities') {
+      const m = caps.map;
+      if (action === 'preset') {
+        if (m.preset) this._hass.callService('select', 'select_option', { entity_id: m.preset, option: argument }).catch(fail);
+        return;
+      }
+      const target = action === 'stop' ? m.stop : action === 'zoom' ? m['zoom_' + argument] : m[argument];
+      if (!target) return;
+      const d = target.split('.')[0];
+      this._hass.callService(d, d === 'script' ? 'turn_on' : 'press', { entity_id: target }).catch(fail);
+      return;
+    }
     const data = argument ? { action, argument } : { action };
-    this._hass.callService('frigate', 'ptz', data, { entity_id: entity })
-      .catch(err => console.warn('[frigate-card] ptz failed', err));
+    this._hass.callService('frigate', 'ptz', data, { entity_id: entity }).catch(fail);
   }
   _updatePtz() {
     const el = this.shadowRoot.querySelector('#ptz'); if (!el) return;
-    const caps = this._cc().ptz;
-    const show = this._config.ptz_controls && caps && this._ptzOpen && this._viewMode === 'single' && !this._playing;
+    const caps = this._ptzFor(this._activeCam?.entity);
+    const show = caps && this._ptzOpen && this._viewMode === 'single' && !this._playing;
     el.style.display = show ? 'flex' : 'none';
-    if (show && el.dataset.for !== this._activeCam.entity) this._renderPtz(el, caps);
+    if (show && (el.dataset.for !== this._activeCam.entity || el._caps !== caps)) this._renderPtz(el, caps);
   }
   _renderPtz(el, caps) {
     el.dataset.for = this._activeCam.entity;
+    el._caps = caps;
     this._fillPtz(el, caps, this._activeCam.entity);
   }
-  // The pad itself, for the single view and for each grid tile alike. `entity`
-  // is the camera it moves, which in a grid is not the active one.
+  // The controls themselves, for the single view and for each grid tile alike.
+  // `entity` is the camera they move, which in a grid is not the active one.
+  // Pan and tilt are a joystick: press anywhere on it, or drag the knob, and
+  // the camera turns that way for as long as it is held; letting go stops it.
+  // The PTZ commands know four directions, so a drag picks the nearest one.
   _fillPtz(el, caps, entity) {
-    const b = (action, arg, glyph, label) =>
-      `<button class="ptz-b" data-ptz="${action}" data-arg="${arg}" title="${this._t(label)}">${glyph}</button>`;
-    const pad = caps.pan ? `<div class="ptz-pad">
-        <span></span>${b('move','up','▲','ptz_up')}<span></span>
-        ${b('move','left','◀','ptz_left')}${b('stop','','■','ptz_stop')}${b('move','right','▶','ptz_right')}
-        <span></span>${b('move','down','▼','ptz_down')}<span></span></div>` : '';
-    const zoom = caps.zoom ? `<div class="ptz-zoom">${b('zoom','in','+','ptz_zoom_in')}${b('zoom','out','−','ptz_zoom_out')}</div>` : '';
+    const avail = d => caps.via !== 'entities' || !!caps.map[d];
+    const arrow = (d, glyph) => avail(d) ? `<span class="joy-arr joy-${d}" data-dir="${d}">${glyph}</span>` : '';
+    const joy = caps.pan ? `<div class="joy" title="${this._t('ptz')}">
+        <div class="joy-ring"></div>
+        ${arrow('up', '▲')}${arrow('down', '▼')}${arrow('left', '◀')}${arrow('right', '▶')}
+        <div class="joy-knob"></div>
+      </div>` : '';
+    const zb = (arg, glyph, label) => (caps.via !== 'entities' || caps.map['zoom_' + arg])
+      ? `<button class="ptz-b" data-ptz="zoom" data-arg="${arg}" title="${this._t(label)}">${glyph}</button>` : '';
+    const zoom = caps.zoom ? `<div class="ptz-zoom">${zb('in', '+', 'ptz_zoom_in')}${zb('out', '−', 'ptz_zoom_out')}</div>` : '';
     const presets = caps.presets.length
-      ? `<select class="ptz-presets"><option value="">${this._t('ptz_preset')}</option>${caps.presets.map(p => `<option value="${p}">${p}</option>`).join('')}</select>` : '';
-    el.innerHTML = pad + zoom + presets;
+      ? `<select class="ptz-presets"><option value="">${this._t('ptz_preset')}</option>${caps.presets.map(p => `<option value="${this._esc(p)}">${this._esc(p)}</option>`).join('')}</select>` : '';
+    el.innerHTML = `<div class="ptz-main">${joy}${zoom}</div>${presets}`;
+
+    const j = el.querySelector('.joy');
+    if (j) this._wireJoystick(j, entity, avail);
     el.querySelectorAll('[data-ptz]').forEach(btn => {
       const action = btn.dataset.ptz, arg = btn.dataset.arg;
-      if (action === 'stop') { btn.addEventListener('click', e => { e.stopPropagation(); this._ptzSend('stop', undefined, entity); }); return; }
-      // Held down keeps moving; any way of letting go stops it.
+      // Held down keeps zooming; any way of letting go stops it.
       const stop = () => { if (btn._held) { btn._held = false; this._ptzSend('stop', undefined, entity); } };
       btn.addEventListener('pointerdown', e => {
         e.preventDefault(); e.stopPropagation();
@@ -987,6 +1031,46 @@ export class FrigateModernHassCard extends HTMLElement {
       if (e.target.value) this._ptzSend('preset', e.target.value, entity);
       e.target.value = '';
     });
+  }
+  _wireJoystick(j, entity, avail) {
+    const knob = j.querySelector('.joy-knob');
+    let dir = null, active = false;
+    const setDir = d => {
+      if (d && !avail(d)) d = null;
+      if (d === dir) return;
+      j.querySelectorAll('.joy-arr').forEach(a => a.classList.toggle('on', a.dataset.dir === d));
+      if (d) this._ptzSend('move', d, entity);
+      else if (dir) this._ptzSend('stop', undefined, entity);
+      dir = d;
+    };
+    const track = e => {
+      const r = j.getBoundingClientRect();
+      const R = r.width / 2;
+      let dx = e.clientX - (r.left + R), dy = e.clientY - (r.top + R);
+      const dist = Math.hypot(dx, dy);
+      const max = R * 0.42; // how far the knob travels
+      const k = dist > max ? max / dist : 1;
+      knob.style.transform = `translate(calc(-50% + ${dx * k}px), calc(-50% + ${dy * k}px))`;
+      // A small dead zone in the middle, so a press on the knob is a stop.
+      if (dist < R * 0.22) return setDir(null);
+      setDir(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+    };
+    const release = () => {
+      if (!active) return;
+      active = false;
+      j.classList.remove('held');
+      knob.style.transform = '';
+      // Always send a stop: a tap in the middle is how you stop a camera that
+      // is still going after a preset or a lost release.
+      if (dir) setDir(null); else this._ptzSend('stop', undefined, entity);
+    };
+    j.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      try { j.setPointerCapture(e.pointerId); } catch (_) {}
+      active = true; j.classList.add('held'); track(e);
+    });
+    j.addEventListener('pointermove', e => { if (active) track(e); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => j.addEventListener(ev, release));
   }
 
   // ── switches and sensors ──────────────────────────────────
@@ -1314,6 +1398,7 @@ export class FrigateModernHassCard extends HTMLElement {
     // Before the cameras are known there is nothing to show yet, and a grid
     // dashboard would be an empty box for the first few seconds. Draw the tiles
     // now, each with a spinner, so the space is held and filled.
+    if (this._ready && this._viewMode === 'single') { this._renderStreamCtrl(); this._updatePtz(); this._renderEntBar(); }
     if (!this._ready && this._config.default_view === 'grid' && multiCam) {
       this._viewMode = 'grid';
       this.shadowRoot.querySelector('.card')?.classList.add('grid-mode');

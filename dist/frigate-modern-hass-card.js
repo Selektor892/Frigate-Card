@@ -7,7 +7,7 @@
  * always-visible compact latest event, camera entity picker in editor.
  * ---------------------------------------------------------------
  */
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const CARD_TAG = 'frigate-modern-hass-card';
 const DAY = 86400;
 // Smallest tile width the automatic grid will produce, in px. Below this a
@@ -94,6 +94,49 @@ function normEntList(list) {
   if (!Array.isArray(list)) return [];
   return list.map(x => (typeof x === 'string' ? { entity: x } : (x && typeof x.entity === 'string' ? { entity: x.entity, name: x.name || null, icon: x.icon || null } : null)))
     .filter(x => x && /^[a-z_]+\.[\w]+$/.test(x.entity));
+}
+// The entities that belong to a camera: those on the same device in Home
+// Assistant's registry, plus those named after it (button.front_door_ptz_left
+// for camera.front_door), which catches a second integration, such as the
+// camera maker's own, that sits on a device of its own. A name that belongs to
+// a longer camera name ("front_door" when matching "front") is left to that
+// camera.
+function camRelated(hass, camEntity) {
+  if (!hass?.states || !camEntity) return [];
+  const reg = hass.entities || {};
+  const dev = reg[camEntity]?.device_id;
+  const keyOf = id => [String(id).split('.')[1], hass.states[id]?.attributes?.camera_name]
+    .filter(Boolean).map(k => String(k).toLowerCase());
+  const mine = keyOf(camEntity);
+  const others = Object.keys(hass.states).filter(e => e.startsWith('camera.') && e !== camEntity)
+    .flatMap(keyOf).filter(k => !mine.includes(k));
+  const named = (obj, k) => obj === k || obj.startsWith(k + '_');
+  return Object.keys(hass.states).filter(id => {
+    if (id === camEntity || id.startsWith('camera.')) return false;
+    if (dev && reg[id]?.device_id === dev) return true;
+    const obj = (id.split('.')[1] || '').toLowerCase();
+    return mine.some(k => named(obj, k) && !others.some(o => o.length > k.length && o.startsWith(k + '_') && named(obj, o)));
+  });
+}
+// Which of those entities steer the camera: PTZ buttons as some integrations
+// expose them (Reolink: button.<cam>_ptz_left ... _ptz_stop, _ptz_zoom_in,
+// select.<cam>_ptz_preset). Returns the role of one entity, or null.
+function ptzRole(id) {
+  const [d, raw] = String(id).split('.');
+  const obj = (raw || '').toLowerCase();
+  if (d === 'select') return /(^|_)ptz(_|$)/.test(obj) && /preset/.test(obj) ? 'preset' : null;
+  if (!['button', 'input_button', 'script'].includes(d)) return null;
+  if (!/(^|_)(ptz|pan|tilt|move|zoom)(_|$)/.test(obj)) return null;
+  if (/zoom_?in(_|$)/.test(obj)) return 'zoom_in';
+  if (/zoom_?out(_|$)/.test(obj)) return 'zoom_out';
+  if (/(^|_)stop(_|$)/.test(obj)) return 'stop';
+  for (const dir of ['left', 'right', 'up', 'down']) if (new RegExp(`(^|_)${dir}(_|$)`).test(obj)) return dir;
+  return null;
+}
+function ptzEntityMap(ids) {
+  const map = {};
+  for (const id of ids) { const r = ptzRole(id); if (r && !map[r]) map[r] = id; }
+  return map;
 }
 function camDisplayName(c) { return c.name || (c.entity||'').replace(/^camera\./,'').replace(/_/g,' '); }
 
@@ -249,25 +292,45 @@ const STYLES = `
      tile is never an empty box while the camera connects. */
   .grid-slot > .ph{position:absolute;inset:0;z-index:0;}
   .grid-slot > .grid-label{z-index:2;}
-  /* PTZ controls: a small pad over the corner of the live view. */
-  .ptz{position:absolute;right:12px;bottom:12px;z-index:7;display:none;gap:10px;align-items:flex-end;
-    background:rgba(15,21,40,.72);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:8px;
+  /* PTZ controls: a joystick with zoom beside it, over the corner of the live
+     view. Kept clear of the bottom edge, where the player has its controls. */
+  .ptz{position:absolute;right:14px;bottom:52px;z-index:7;display:none;flex-direction:column;gap:8px;align-items:flex-end;
+    user-select:none;-webkit-user-select:none;}
+  .ptz-main{display:flex;gap:10px;align-items:center;}
+  .joy{--joy:118px;position:relative;width:var(--joy);height:var(--joy);border-radius:50%;flex-shrink:0;cursor:grab;
+    touch-action:none;background:radial-gradient(circle at 50% 45%,rgba(40,52,84,.78),rgba(12,17,32,.82) 70%);
+    border:1px solid rgba(255,255,255,.18);box-shadow:0 6px 18px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08);
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
-  .ptz-pad{display:grid;grid-template-columns:repeat(3,30px);grid-auto-rows:30px;gap:3px;}
-  .ptz-zoom{display:flex;flex-direction:column;gap:3px;}
-  .ptz-b{width:30px;height:30px;padding:0;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);
-    color:#fff;border-radius:8px;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
-    touch-action:none;user-select:none;-webkit-user-select:none;}
+  .joy.held{cursor:grabbing;}
+  .joy-ring{position:absolute;inset:22%;border-radius:50%;border:1px dashed rgba(255,255,255,.14);pointer-events:none;}
+  .joy-arr{position:absolute;color:rgba(255,255,255,.55);font-size:calc(var(--joy) * .11);line-height:1;pointer-events:none;
+    transition:color .12s,transform .12s;}
+  .joy-arr.on{color:var(--c-acc);transform:scale(1.25);}
+  .joy-up{top:7%;left:50%;margin-left:calc(var(--joy) * -.055);}
+  .joy-down{bottom:7%;left:50%;margin-left:calc(var(--joy) * -.055);}
+  .joy-left{left:7%;top:50%;margin-top:calc(var(--joy) * -.055);}
+  .joy-right{right:7%;top:50%;margin-top:calc(var(--joy) * -.055);}
+  .joy-knob{position:absolute;left:50%;top:50%;width:40%;height:40%;border-radius:50%;transform:translate(-50%,-50%);
+    background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.55),rgba(150,165,200,.35) 45%,rgba(40,50,80,.9));
+    border:2px solid var(--c-acc-bdr);box-shadow:0 4px 10px rgba(0,0,0,.5);pointer-events:none;
+    transition:transform .18s cubic-bezier(.3,1.4,.5,1);}
+  .joy.held .joy-knob{transition:none;border-color:var(--c-acc);}
+  .ptz-zoom{display:flex;flex-direction:column;gap:6px;}
+  .ptz-b{width:36px;height:36px;padding:0;border:1px solid rgba(255,255,255,.18);background:rgba(15,21,40,.72);
+    color:#fff;border-radius:50%;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    touch-action:none;user-select:none;-webkit-user-select:none;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
   .ptz-b:hover{background:var(--c-acc-bg);border-color:var(--c-acc-bdr);}
   .ptz-b:active{background:var(--c-acc);}
-  .ptz-presets{align-self:stretch;max-width:130px;background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.18);
-    border-radius:8px;font-size:11px;padding:0 6px;min-height:30px;}
+  .ptz-presets{max-width:164px;background:rgba(15,21,40,.72);color:#fff;border:1px solid rgba(255,255,255,.18);
+    border-radius:16px;font-size:11px;padding:0 10px;min-height:30px;}
   .ptz-presets option{color:#111;}
-  /* On a grid tile the pad is smaller and only shows while the pointer is over it. */
-  .ptz-tile{right:6px;bottom:26px;gap:6px;padding:5px;border-radius:10px;}
-  .ptz-tile .ptz-pad{grid-template-columns:repeat(3,24px);grid-auto-rows:24px;gap:2px;}
-  .ptz-tile .ptz-b{width:24px;height:24px;font-size:11px;border-radius:6px;}
-  .ptz-tile .ptz-presets{min-height:24px;max-width:96px;font-size:10px;}
+  /* On a grid tile it is smaller and only shows while the pointer is over it. */
+  .ptz-tile{right:6px;bottom:26px;gap:5px;}
+  .ptz-tile .ptz-main{gap:6px;}
+  .ptz-tile .joy{--joy:78px;}
+  .ptz-tile .ptz-b{width:26px;height:26px;font-size:14px;}
+  .ptz-tile .ptz-presets{min-height:22px;max-width:110px;font-size:10px;padding:0 6px;}
+  .card.mobile .ptz:not(.ptz-tile) .joy{--joy:96px;}
   .grid-slot:hover > .ptz-tile{display:flex;}
   /* Switches and sensors of a camera, as chips over the top left corner. */
   .ent-bar{position:absolute;top:10px;left:12px;right:56px;z-index:6;display:flex;flex-wrap:wrap;gap:6px;
@@ -520,6 +583,8 @@ const STRINGS = {
     unavailable: 'Unavailable',
     action_failed: 'Could not change it',
     ptz: 'PTZ controls',
+    show_ptz: 'Show PTZ',
+    hide_ptz: 'Hide PTZ',
     ptz_up: 'Up',
     ptz_down: 'Down',
     ptz_left: 'Left',
@@ -643,13 +708,16 @@ const STRINGS = {
     e_max_height: 'Maximum camera height',
     e_max_height_ph: 'e.g. 70, blank = automatic',
     e_max_height_hint: 'As a percentage of the screen height. Leave empty to let the cameras size themselves; a grid uses at most 70% by default. Raise it for a wall display.',
-    e_ptz_controls: 'Show PTZ controls',
+    e_ptz_controls: 'Show PTZ joystick',
     e_ptz_controls_hint: 'Cameras with ONVIF set up in Frigate get a pad to pan, tilt, zoom and recall presets. Cameras without PTZ show nothing.',
     e_window_hours: 'Window hours',
     e_extras: 'Buttons and sensors',
     e_extras_n: '{n} buttons/sensors',
     e_switches: 'Buttons',
-    e_switches_hint: 'Switches, lights, scripts... A tap toggles or runs them.',
+    e_switches_hint: 'Switches, lights, scripts... of this camera. A tap toggles or runs them.',
+    e_ptz_found: 'This camera can pan/tilt/zoom: the joystick appears on its own.',
+    e_pick_camera_first: 'Choose the camera first',
+    e_none_for_camera: 'None found for this camera',
     e_sensors: 'Sensors',
     e_sensors_hint: 'Shown as values over the picture. A tap opens their history.',
     e_add_switch: '+ Add a button…',
@@ -691,6 +759,8 @@ const STRINGS = {
     unavailable: 'Non disponibile',
     action_failed: 'Impossibile modificarlo',
     ptz: 'Controlli PTZ',
+    show_ptz: 'Mostra PTZ',
+    hide_ptz: 'Nascondi PTZ',
     ptz_up: 'Su',
     ptz_down: 'Giù',
     ptz_left: 'Sinistra',
@@ -807,13 +877,16 @@ const STRINGS = {
     e_max_height: 'Altezza massima delle telecamere',
     e_max_height_ph: 'es. 70, vuoto = automatica',
     e_max_height_hint: 'In percentuale dell’altezza dello schermo. Lascia vuoto per far dimensionare le telecamere automaticamente; una griglia usa al massimo il 70% per impostazione predefinita. Aumentalo per un display a parete.',
-    e_ptz_controls: 'Mostra i controlli PTZ',
+    e_ptz_controls: 'Mostra joystick PTZ',
     e_ptz_controls_hint: 'Le telecamere con ONVIF configurato in Frigate hanno un pad per muovere, inclinare, fare zoom e richiamare i preset. Le telecamere senza PTZ non mostrano nulla.',
     e_window_hours: 'Ore visualizzate',
     e_extras: 'Pulsanti e sensori',
     e_extras_n: '{n} pulsanti/sensori',
     e_switches: 'Pulsanti',
-    e_switches_hint: 'Switch, luci, script... Un tocco li accende/spegne o li avvia.',
+    e_switches_hint: 'Switch, luci, script... di questa telecamera. Un tocco li accende/spegne o li avvia.',
+    e_ptz_found: 'Questa telecamera si può muovere: il joystick compare da solo.',
+    e_pick_camera_first: 'Scegli prima la telecamera',
+    e_none_for_camera: 'Nessuna trovata per questa telecamera',
     e_sensors: 'Sensori',
     e_sensors_hint: 'Mostrati come valori sopra l’immagine. Un tocco apre lo storico.',
     e_add_switch: '+ Aggiungi un pulsante…',
@@ -1582,6 +1655,7 @@ class FrigateModernHassCard extends HTMLElement {
     this._streamMuted = true; // initial live-view mute state; never changed after mount (see _mountEngine)
     this._showReviewed = false; // reviews: hide reviewed by default
     this._domCache = {}; // querySelector result cache — cleared on re-render
+    this._ptzOpen = true; // the joystick shows by itself; the toolbar button hides it
   }
 
   static getConfigElement() { return document.createElement(CARD_TAG+'-editor'); }
@@ -1591,10 +1665,10 @@ class FrigateModernHassCard extends HTMLElement {
     let cameras;
     if (config.cameras && Array.isArray(config.cameras) && config.cameras.length)
       cameras = config.cameras.map(c => ({ entity:c.entity, name:c.name||null, span:normSpan(c.span),
-        switches:normEntList(c.switches), sensors:normEntList(c.sensors) }));
+        switches:normEntList(c.switches), sensors:normEntList(c.sensors), ptz:c.ptz !== false }));
     else if (config.camera_entity)
       cameras = [{ entity:config.camera_entity, name:config.title||null, span:normSpan(),
-        switches:normEntList(config.switches), sensors:normEntList(config.sensors) }];
+        switches:normEntList(config.switches), sensors:normEntList(config.sensors), ptz:config.ptz !== false }];
     else throw new Error('camera_entity or cameras[] required');
 
     this._config = {
@@ -2390,8 +2464,8 @@ class FrigateModernHassCard extends HTMLElement {
     const events = `<button class="tool" id="sc-events"></button>`;
     // Only offered for a camera Frigate says can move, and only in the single
     // view: the pad acts on one camera.
-    const ptz = (this._config.ptz_controls && !inGrid && this._cc().ptz)
-      ? `<button class="tool${this._ptzOpen ? ' on' : ''}" id="sc-ptz" title="${this._t('ptz')}">${ICONS.ptz}</button>` : '';
+    const ptz = (!inGrid && this._ptzFor(this._activeCam?.entity))
+      ? `<button class="tool${this._ptzOpen ? ' on' : ''}" id="sc-ptz" title="${this._ptzOpen ? this._t('hide_ptz') : this._t('show_ptz')}">${ICONS.ptz}</button>` : '';
     bar.innerHTML = `${ptz}${grid}${fs}${events}`;
     this._applyEventsCollapsed();
   }
@@ -2459,16 +2533,35 @@ class FrigateModernHassCard extends HTMLElement {
       .map(p => (typeof p === 'string' ? p : p?.name)).filter(Boolean);
     if (!features.length && !presets.length) return null;
     return {
+      via: 'frigate',
       pan: features.some(f => String(f).startsWith('pt')) || !features.length,
       zoom: features.some(f => String(f).startsWith('zoom')) || !features.length,
       presets,
     };
   }
-  // A grid tile's pad. It shows on hover (CSS) and only on a tile that is
+  // A camera Frigate cannot steer (no ONVIF in Frigate) may still have PTZ
+  // buttons from its own integration. Those drive the same joystick.
+  _ptzFromEntities(entity) {
+    const map = ptzEntityMap(camRelated(this._hass, entity));
+    const pan = ['up', 'down', 'left', 'right'].some(k => map[k]);
+    const zoom = !!(map.zoom_in || map.zoom_out);
+    const presets = map.preset ? (this._hass.states[map.preset]?.attributes?.options || []) : [];
+    if (!pan && !zoom && !presets.length) return null;
+    return { via: 'entities', pan, zoom, presets, map };
+  }
+  // The capabilities to show for a camera, or null when it has none or its PTZ
+  // is switched off (for all cameras with ptz_controls, or for this one).
+  _ptzFor(entity) {
+    if (!this._config.ptz_controls || !entity) return null;
+    const cam = this._config.cameras.find(c => c.entity === entity);
+    if (cam && cam.ptz === false) return null;
+    return this._camCache[entity]?.ptz || null;
+  }
+  // A grid tile's joystick. It shows on hover (CSS) and only on a tile that is
   // showing the live picture, not one playing a clip.
   _addTilePtz(slot, entity) {
-    const caps = this._camCache[entity]?.ptz;
-    if (!this._config.ptz_controls || !caps || !slot || slot.querySelector(':scope > .ptz')) return;
+    const caps = this._ptzFor(entity);
+    if (!caps || !slot || slot.querySelector(':scope > .ptz')) return;
     const pad = document.createElement('div');
     pad.className = 'ptz ptz-tile';
     this._fillPtz(pad, caps, entity);
@@ -2488,44 +2581,68 @@ class FrigateModernHassCard extends HTMLElement {
     if (cc.ptz === undefined) {
       try { cc.ptz = this._ptzCaps(await this._ws({ type:'frigate/ptz/info', instance_id:cc.clientId, camera:cc.cam })); }
       catch (_) { cc.ptz = null; }
+      if (!cc.ptz) cc.ptz = this._ptzFromEntities(ent);
     }
     if (this._viewMode === 'grid') this._refreshTilePtz(ent);
     if (this._activeCam?.entity === ent) { this._renderStreamCtrl(); this._updatePtz(); }
   }
+  // action: move (argument up/down/left/right), zoom (in/out), stop, preset.
   _ptzSend(action, argument, entity = this._activeCam?.entity) {
     if (!entity) return;
+    const caps = this._camCache[entity]?.ptz;
+    const fail = err => console.warn('[frigate-card] ptz failed', err);
+    if (caps?.via === 'entities') {
+      const m = caps.map;
+      if (action === 'preset') {
+        if (m.preset) this._hass.callService('select', 'select_option', { entity_id: m.preset, option: argument }).catch(fail);
+        return;
+      }
+      const target = action === 'stop' ? m.stop : action === 'zoom' ? m['zoom_' + argument] : m[argument];
+      if (!target) return;
+      const d = target.split('.')[0];
+      this._hass.callService(d, d === 'script' ? 'turn_on' : 'press', { entity_id: target }).catch(fail);
+      return;
+    }
     const data = argument ? { action, argument } : { action };
-    this._hass.callService('frigate', 'ptz', data, { entity_id: entity })
-      .catch(err => console.warn('[frigate-card] ptz failed', err));
+    this._hass.callService('frigate', 'ptz', data, { entity_id: entity }).catch(fail);
   }
   _updatePtz() {
     const el = this.shadowRoot.querySelector('#ptz'); if (!el) return;
-    const caps = this._cc().ptz;
-    const show = this._config.ptz_controls && caps && this._ptzOpen && this._viewMode === 'single' && !this._playing;
+    const caps = this._ptzFor(this._activeCam?.entity);
+    const show = caps && this._ptzOpen && this._viewMode === 'single' && !this._playing;
     el.style.display = show ? 'flex' : 'none';
-    if (show && el.dataset.for !== this._activeCam.entity) this._renderPtz(el, caps);
+    if (show && (el.dataset.for !== this._activeCam.entity || el._caps !== caps)) this._renderPtz(el, caps);
   }
   _renderPtz(el, caps) {
     el.dataset.for = this._activeCam.entity;
+    el._caps = caps;
     this._fillPtz(el, caps, this._activeCam.entity);
   }
-  // The pad itself, for the single view and for each grid tile alike. `entity`
-  // is the camera it moves, which in a grid is not the active one.
+  // The controls themselves, for the single view and for each grid tile alike.
+  // `entity` is the camera they move, which in a grid is not the active one.
+  // Pan and tilt are a joystick: press anywhere on it, or drag the knob, and
+  // the camera turns that way for as long as it is held; letting go stops it.
+  // The PTZ commands know four directions, so a drag picks the nearest one.
   _fillPtz(el, caps, entity) {
-    const b = (action, arg, glyph, label) =>
-      `<button class="ptz-b" data-ptz="${action}" data-arg="${arg}" title="${this._t(label)}">${glyph}</button>`;
-    const pad = caps.pan ? `<div class="ptz-pad">
-        <span></span>${b('move','up','▲','ptz_up')}<span></span>
-        ${b('move','left','◀','ptz_left')}${b('stop','','■','ptz_stop')}${b('move','right','▶','ptz_right')}
-        <span></span>${b('move','down','▼','ptz_down')}<span></span></div>` : '';
-    const zoom = caps.zoom ? `<div class="ptz-zoom">${b('zoom','in','+','ptz_zoom_in')}${b('zoom','out','−','ptz_zoom_out')}</div>` : '';
+    const avail = d => caps.via !== 'entities' || !!caps.map[d];
+    const arrow = (d, glyph) => avail(d) ? `<span class="joy-arr joy-${d}" data-dir="${d}">${glyph}</span>` : '';
+    const joy = caps.pan ? `<div class="joy" title="${this._t('ptz')}">
+        <div class="joy-ring"></div>
+        ${arrow('up', '▲')}${arrow('down', '▼')}${arrow('left', '◀')}${arrow('right', '▶')}
+        <div class="joy-knob"></div>
+      </div>` : '';
+    const zb = (arg, glyph, label) => (caps.via !== 'entities' || caps.map['zoom_' + arg])
+      ? `<button class="ptz-b" data-ptz="zoom" data-arg="${arg}" title="${this._t(label)}">${glyph}</button>` : '';
+    const zoom = caps.zoom ? `<div class="ptz-zoom">${zb('in', '+', 'ptz_zoom_in')}${zb('out', '−', 'ptz_zoom_out')}</div>` : '';
     const presets = caps.presets.length
-      ? `<select class="ptz-presets"><option value="">${this._t('ptz_preset')}</option>${caps.presets.map(p => `<option value="${p}">${p}</option>`).join('')}</select>` : '';
-    el.innerHTML = pad + zoom + presets;
+      ? `<select class="ptz-presets"><option value="">${this._t('ptz_preset')}</option>${caps.presets.map(p => `<option value="${this._esc(p)}">${this._esc(p)}</option>`).join('')}</select>` : '';
+    el.innerHTML = `<div class="ptz-main">${joy}${zoom}</div>${presets}`;
+
+    const j = el.querySelector('.joy');
+    if (j) this._wireJoystick(j, entity, avail);
     el.querySelectorAll('[data-ptz]').forEach(btn => {
       const action = btn.dataset.ptz, arg = btn.dataset.arg;
-      if (action === 'stop') { btn.addEventListener('click', e => { e.stopPropagation(); this._ptzSend('stop', undefined, entity); }); return; }
-      // Held down keeps moving; any way of letting go stops it.
+      // Held down keeps zooming; any way of letting go stops it.
       const stop = () => { if (btn._held) { btn._held = false; this._ptzSend('stop', undefined, entity); } };
       btn.addEventListener('pointerdown', e => {
         e.preventDefault(); e.stopPropagation();
@@ -2538,6 +2655,46 @@ class FrigateModernHassCard extends HTMLElement {
       if (e.target.value) this._ptzSend('preset', e.target.value, entity);
       e.target.value = '';
     });
+  }
+  _wireJoystick(j, entity, avail) {
+    const knob = j.querySelector('.joy-knob');
+    let dir = null, active = false;
+    const setDir = d => {
+      if (d && !avail(d)) d = null;
+      if (d === dir) return;
+      j.querySelectorAll('.joy-arr').forEach(a => a.classList.toggle('on', a.dataset.dir === d));
+      if (d) this._ptzSend('move', d, entity);
+      else if (dir) this._ptzSend('stop', undefined, entity);
+      dir = d;
+    };
+    const track = e => {
+      const r = j.getBoundingClientRect();
+      const R = r.width / 2;
+      let dx = e.clientX - (r.left + R), dy = e.clientY - (r.top + R);
+      const dist = Math.hypot(dx, dy);
+      const max = R * 0.42; // how far the knob travels
+      const k = dist > max ? max / dist : 1;
+      knob.style.transform = `translate(calc(-50% + ${dx * k}px), calc(-50% + ${dy * k}px))`;
+      // A small dead zone in the middle, so a press on the knob is a stop.
+      if (dist < R * 0.22) return setDir(null);
+      setDir(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+    };
+    const release = () => {
+      if (!active) return;
+      active = false;
+      j.classList.remove('held');
+      knob.style.transform = '';
+      // Always send a stop: a tap in the middle is how you stop a camera that
+      // is still going after a preset or a lost release.
+      if (dir) setDir(null); else this._ptzSend('stop', undefined, entity);
+    };
+    j.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      try { j.setPointerCapture(e.pointerId); } catch (_) {}
+      active = true; j.classList.add('held'); track(e);
+    });
+    j.addEventListener('pointermove', e => { if (active) track(e); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => j.addEventListener(ev, release));
   }
 
   // ── switches and sensors ──────────────────────────────────
@@ -2865,6 +3022,7 @@ class FrigateModernHassCard extends HTMLElement {
     // Before the cameras are known there is nothing to show yet, and a grid
     // dashboard would be an empty box for the first few seconds. Draw the tiles
     // now, each with a spinner, so the space is held and filled.
+    if (this._ready && this._viewMode === 'single') { this._renderStreamCtrl(); this._updatePtz(); this._renderEntBar(); }
     if (!this._ready && this._config.default_view === 'grid' && multiCam) {
       this._viewMode = 'grid';
       this.shadowRoot.querySelector('.card')?.classList.add('grid-mode');
@@ -3824,6 +3982,7 @@ class FrigateModernHassCardEditor extends HTMLElement {
       .lay-auto{width:100%;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;
         color:var(--ed-dim);font-size:10px;text-align:center;border:1px dashed var(--ed-line);border-radius:4px;}
       .xr{margin:-2px 0 8px 31px;}
+      .xh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
       .xt{padding:3px 9px;border:1px dashed var(--ed-line);background:transparent;color:var(--ed-dim);
         border-radius:6px;cursor:pointer;font-size:11px;}
       .xt.on,.xt.has{border-style:solid;border-color:var(--ed-acc);color:var(--ed-acc);}
@@ -3868,10 +4027,6 @@ class FrigateModernHassCardEditor extends HTMLElement {
         <div class="radio-row">
           <label class="radio-lbl"><input type="radio" name="default_view" value="single" ${defaultView==='single'?'checked':''}> ${this._t('e_single_camera')}</label>
           <label class="radio-lbl"><input type="radio" name="default_view" value="grid" ${defaultView==='grid'?'checked':''}> ${this._t('e_grid_all')}</label>
-        </div>
-        <div style="margin-top:8px">
-          <label class="chk-lbl"><input type="checkbox" name="ptz_controls" id="ptz_controls" ${this._config?.ptz_controls!==false?'checked':''}> ${this._t('e_ptz_controls')}</label>
-          <small class="hint" style="display:block;margin-top:4px">${this._t('e_ptz_controls_hint')}</small>
         </div>
         <div style="margin-top:8px">
           <label class="chk-lbl"><input type="checkbox" name="rotate_on_load" id="rotate_on_load" ${rotateOnLoad?'checked':''}> ${this._t('e_rotate_on_load')}</label>
@@ -4012,7 +4167,7 @@ class FrigateModernHassCardEditor extends HTMLElement {
       const cur = this._getCams(); // keeps the sizes, which belong to the tile
       const nameOf = k => before[k]?.name || '';
       // Switches and sensors belong to the camera, so they move with it.
-      const extrasOf = k => ({ switches: before[k]?.switches, sensors: before[k]?.sensors });
+      const extrasOf = k => ({ switches: before[k]?.switches, sensors: before[k]?.sensors, ptz: before[k]?.ptz });
       cur[i] = this._withExtras({ ...cur[i], entity: picked, name: nameOf(j) }, extrasOf(j));
       cur[j] = this._withExtras({ ...cur[j], entity: before[i]?.entity || '', name: nameOf(i) }, extrasOf(i));
       this._config = { ...this._config, cameras: cur }; delete this._config.camera_entity;
@@ -4092,9 +4247,10 @@ class FrigateModernHassCardEditor extends HTMLElement {
   }
   _withExtras(cam, src) {
     const out = { ...cam };
-    delete out.switches; delete out.sensors;
+    delete out.switches; delete out.sensors; delete out.ptz;
     if (src?.switches?.length) out.switches = src.switches;
     if (src?.sensors?.length) out.sensors = src.sensors;
+    if (src?.ptz === false) out.ptz = false; // shown is the default, so only "hidden" is written
     return out;
   }
   _editExtras(i, kind, fn) {
@@ -4106,36 +4262,58 @@ class FrigateModernHassCardEditor extends HTMLElement {
     delete c.camera_entity; delete c.switches; delete c.sensors;
     this._config = c; this._render(); this._dispatch();
   }
-  // Entities a camera could use, the ones named after it first: Frigate calls
-  // its switches switch.<camera>_detect, switch.<camera>_recordings and so on.
+  // Whether a camera can be steered: PTZ buttons among its entities, or, for
+  // ONVIF set up in Frigate, what Frigate answers. That answer takes a round
+  // trip, so it is asked once and the panel redrawn when it comes back yes.
+  _ptzDetected(entity) {
+    if (!entity || !this._hass) return false;
+    const map = ptzEntityMap(camRelated(this._hass, entity));
+    if (Object.keys(map).length) return true;
+    this._ptzWs = this._ptzWs || {};
+    if (this._ptzWs[entity] === undefined) {
+      this._ptzWs[entity] = false;
+      const a = this._hass.states[entity]?.attributes || {};
+      const camera = a.camera_name || entity.replace(/^camera\./, '');
+      Promise.resolve(this._hass.callWS?.({ type: 'frigate/ptz/info', instance_id: a.client_id || a.mqtt_client_id || 'frigate', camera }))
+        .then(res => {
+          const r = parseWs(res) || {};
+          const presets = Array.isArray(r.presets) ? r.presets : Object.keys(r.presets || {});
+          if ((Array.isArray(r.features) && r.features.length) || presets.length) { this._ptzWs[entity] = true; this._render(); }
+        }).catch(() => {});
+    }
+    return this._ptzWs[entity] === true;
+  }
+  // A camera's own entities only: those on its device, or named after it. PTZ
+  // buttons are left out, since the joystick drives them.
   _extrasRow(cam, i) {
     const open = this._extrasOpen?.has(i);
     const n = (cam.switches?.length || 0) + (cam.sensors?.length || 0);
     const btn = `<button type="button" class="xt${open ? ' on' : ''}${n ? ' has' : ''}" data-toggle-extras="${i}">${open ? '▾' : '▸'} ${n ? this._t('e_extras_n', {n}) : this._t('e_extras')}</button>`;
-    if (!open) return `<div class="xr">${btn}</div>`;
+    const hasPtz = cam.ptz === false || this._ptzDetected(cam.entity);
+    const ptzOn = cam.ptz !== false && this._config?.ptz_controls !== false;
+    const ptzBox = hasPtz ? `<label class="chk-lbl" title="${this._t('e_ptz_found')}"><input type="checkbox" data-cam-ptz="${i}" ${ptzOn ? 'checked' : ''}> ${this._t('e_ptz_controls')}</label>` : '';
+    const head = `<div class="xh">${btn}${ptzBox}</div>`;
+    if (!open) return `<div class="xr">${head}</div>`;
     const states = this._hass?.states || {};
-    const key = (cam.entity || '').replace(/^camera\./, '');
-    const camAttr = states[cam.entity]?.attributes?.camera_name;
-    const mine = id => { const o = id.split('.')[1] || ''; return !!key && (o.startsWith(key) || (!!camAttr && o.startsWith(camAttr))); };
+    const related = camRelated(this._hass, cam.entity).filter(e => !ptzRole(e));
     const section = (kind, domains, title, hint, addLbl) => {
       const list = cam[kind] || [];
       const taken = new Set(list.map(x => (typeof x === 'string' ? x : x?.entity)));
-      const all = Object.keys(states).filter(e => domains.includes(e.split('.')[0]) && !taken.has(e)).sort();
+      const avail = related.filter(e => domains.includes(e.split('.')[0]) && !taken.has(e)).sort();
       const opt = e => `<option value="${e}">${states[e]?.attributes?.friendly_name ? `${states[e].attributes.friendly_name} (${e})` : e}</option>`;
-      const ownList = all.filter(mine), rest = all.filter(e => !mine(e));
       const chips = list.map((x, k) => {
         const id = typeof x === 'string' ? x : x?.entity;
         const nm = (typeof x === 'object' && x?.name) || states[id]?.attributes?.friendly_name || id;
         return `<span class="xc" title="${id}">${nm}<button type="button" data-del-ent="${i}:${kind}:${k}" title="${this._t('e_remove')}">✕</button></span>`;
       }).join('');
+      const first = !cam.entity ? this._t('e_pick_camera_first') : avail.length ? addLbl : this._t('e_none_for_camera');
       return `<div><span class="field-label">${title}</span><small class="hint">${hint}</small>
         ${chips ? `<div class="xl">${chips}</div>` : ''}
-        <select class="xa" data-add-ent="${i}:${kind}"><option value="">${addLbl}</option>
-          ${ownList.length ? `<optgroup label="${this._t('e_for_camera')}">${ownList.map(opt).join('')}</optgroup>` : ''}
-          ${rest.length ? `<optgroup label="${this._t('e_other')}">${rest.map(opt).join('')}</optgroup>` : ''}
+        <select class="xa" data-add-ent="${i}:${kind}" ${avail.length ? '' : 'disabled'}><option value="">${first}</option>
+          ${avail.map(opt).join('')}
         </select></div>`;
     };
-    return `<div class="xr">${btn}<div class="xp">
+    return `<div class="xr">${head}<div class="xp">
       ${section('switches', ['switch','input_boolean','light','fan','siren','button','input_button','script','scene'],
         this._t('e_switches'), this._t('e_switches_hint'), this._t('e_add_switch'))}
       ${section('sensors', ['sensor','binary_sensor'],
@@ -4148,12 +4326,13 @@ class FrigateModernHassCardEditor extends HTMLElement {
     const prev = this._rowCams || this._cfgCams();
     return rows.map((r, idx) => {
       const span = Number(r.querySelector('[data-cam-span]')?.value || 1);
+      const ptzBox = this.querySelector(`[data-cam-ptz="${idx}"]`);
       return this._withExtras({
         entity: r.querySelector('[data-cam-entity]')?.value || '',
         name: r.querySelector('[data-cam-name]')?.value || '',
         // Only carry a size when it is not the default, to keep configs clean.
         ...(span > 1 ? { span } : {}),
-      }, prev[idx]);
+      }, { ...prev[idx], ptz: ptzBox ? ptzBox.checked : prev[idx]?.ptz });
     });
   }
   _u() {
@@ -4161,7 +4340,7 @@ class FrigateModernHassCardEditor extends HTMLElement {
     const cams = this._getCams().filter(c => c.entity);
     const c = { ...this._config };
     // A camera with switches or sensors needs the cameras list to hold them.
-    if (cams.length > 1 || cams.some(x => x.switches || x.sensors)) { c.cameras = cams; delete c.camera_entity; delete c.switches; delete c.sensors; }
+    if (cams.length > 1 || cams.some(x => x.switches || x.sensors || x.ptz === false)) { c.cameras = cams; delete c.camera_entity; delete c.switches; delete c.sensors; }
     else if (cams.length === 1) { c.camera_entity = cams[0].entity; delete c.cameras; }
     const t=g('title'),s=g('subtitle'),w=g('window_hours'),r=g('rotate_seconds');
     if(t) c.title=t; else delete c.title;
@@ -4187,7 +4366,9 @@ class FrigateModernHassCardEditor extends HTMLElement {
     const sh = this.querySelector('#stream_height')?.value;
     c.stream_height = sh ? Number(sh) : null;
     c.events_collapsed = this.querySelector('#events_collapsed')?.checked === true;
-    c.ptz_controls = this.querySelector('#ptz_controls')?.checked !== false;
+    // The joystick is now switched per camera. An old ptz_controls: false would
+    // hide it everywhere whatever those say, so ticking one lifts it.
+    if (this.querySelector('[data-cam-ptz]:checked')) delete c.ptz_controls;
     c.sidebar_separate = this.querySelector('#sidebar_separate')?.checked === true;
     c.sidebar_position = this.querySelector('input[name="sidebar_position"]:checked')?.value === 'left' ? 'left' : 'right';
     if (this._config?.grid_layout) c.grid_layout = this._config.grid_layout;

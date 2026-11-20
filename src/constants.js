@@ -7,7 +7,7 @@
  * always-visible compact latest event, camera entity picker in editor.
  * ---------------------------------------------------------------
  */
-export const VERSION = '1.6.0';
+export const VERSION = '1.7.0';
 export const CARD_TAG = 'frigate-modern-hass-card';
 export const DAY = 86400;
 // Smallest tile width the automatic grid will produce, in px. Below this a
@@ -94,6 +94,49 @@ export function normEntList(list) {
   if (!Array.isArray(list)) return [];
   return list.map(x => (typeof x === 'string' ? { entity: x } : (x && typeof x.entity === 'string' ? { entity: x.entity, name: x.name || null, icon: x.icon || null } : null)))
     .filter(x => x && /^[a-z_]+\.[\w]+$/.test(x.entity));
+}
+// The entities that belong to a camera: those on the same device in Home
+// Assistant's registry, plus those named after it (button.front_door_ptz_left
+// for camera.front_door), which catches a second integration, such as the
+// camera maker's own, that sits on a device of its own. A name that belongs to
+// a longer camera name ("front_door" when matching "front") is left to that
+// camera.
+export function camRelated(hass, camEntity) {
+  if (!hass?.states || !camEntity) return [];
+  const reg = hass.entities || {};
+  const dev = reg[camEntity]?.device_id;
+  const keyOf = id => [String(id).split('.')[1], hass.states[id]?.attributes?.camera_name]
+    .filter(Boolean).map(k => String(k).toLowerCase());
+  const mine = keyOf(camEntity);
+  const others = Object.keys(hass.states).filter(e => e.startsWith('camera.') && e !== camEntity)
+    .flatMap(keyOf).filter(k => !mine.includes(k));
+  const named = (obj, k) => obj === k || obj.startsWith(k + '_');
+  return Object.keys(hass.states).filter(id => {
+    if (id === camEntity || id.startsWith('camera.')) return false;
+    if (dev && reg[id]?.device_id === dev) return true;
+    const obj = (id.split('.')[1] || '').toLowerCase();
+    return mine.some(k => named(obj, k) && !others.some(o => o.length > k.length && o.startsWith(k + '_') && named(obj, o)));
+  });
+}
+// Which of those entities steer the camera: PTZ buttons as some integrations
+// expose them (Reolink: button.<cam>_ptz_left ... _ptz_stop, _ptz_zoom_in,
+// select.<cam>_ptz_preset). Returns the role of one entity, or null.
+export function ptzRole(id) {
+  const [d, raw] = String(id).split('.');
+  const obj = (raw || '').toLowerCase();
+  if (d === 'select') return /(^|_)ptz(_|$)/.test(obj) && /preset/.test(obj) ? 'preset' : null;
+  if (!['button', 'input_button', 'script'].includes(d)) return null;
+  if (!/(^|_)(ptz|pan|tilt|move|zoom)(_|$)/.test(obj)) return null;
+  if (/zoom_?in(_|$)/.test(obj)) return 'zoom_in';
+  if (/zoom_?out(_|$)/.test(obj)) return 'zoom_out';
+  if (/(^|_)stop(_|$)/.test(obj)) return 'stop';
+  for (const dir of ['left', 'right', 'up', 'down']) if (new RegExp(`(^|_)${dir}(_|$)`).test(obj)) return dir;
+  return null;
+}
+export function ptzEntityMap(ids) {
+  const map = {};
+  for (const id of ids) { const r = ptzRole(id); if (r && !map[r]) map[r] = id; }
+  return map;
 }
 export function camDisplayName(c) { return c.name || (c.entity||'').replace(/^camera\./,'').replace(/_/g,' '); }
 

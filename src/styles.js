@@ -149,25 +149,45 @@ export const STYLES = `
      tile is never an empty box while the camera connects. */
   .grid-slot > .ph{position:absolute;inset:0;z-index:0;}
   .grid-slot > .grid-label{z-index:2;}
-  /* PTZ controls: a small pad over the corner of the live view. */
-  .ptz{position:absolute;right:12px;bottom:12px;z-index:7;display:none;gap:10px;align-items:flex-end;
-    background:rgba(15,21,40,.72);border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:8px;
+  /* PTZ controls: a joystick with zoom beside it, over the corner of the live
+     view. Kept clear of the bottom edge, where the player has its controls. */
+  .ptz{position:absolute;right:14px;bottom:52px;z-index:7;display:none;flex-direction:column;gap:8px;align-items:flex-end;
+    user-select:none;-webkit-user-select:none;}
+  .ptz-main{display:flex;gap:10px;align-items:center;}
+  .joy{--joy:118px;position:relative;width:var(--joy);height:var(--joy);border-radius:50%;flex-shrink:0;cursor:grab;
+    touch-action:none;background:radial-gradient(circle at 50% 45%,rgba(40,52,84,.78),rgba(12,17,32,.82) 70%);
+    border:1px solid rgba(255,255,255,.18);box-shadow:0 6px 18px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.08);
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
-  .ptz-pad{display:grid;grid-template-columns:repeat(3,30px);grid-auto-rows:30px;gap:3px;}
-  .ptz-zoom{display:flex;flex-direction:column;gap:3px;}
-  .ptz-b{width:30px;height:30px;padding:0;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);
-    color:#fff;border-radius:8px;font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
-    touch-action:none;user-select:none;-webkit-user-select:none;}
+  .joy.held{cursor:grabbing;}
+  .joy-ring{position:absolute;inset:22%;border-radius:50%;border:1px dashed rgba(255,255,255,.14);pointer-events:none;}
+  .joy-arr{position:absolute;color:rgba(255,255,255,.55);font-size:calc(var(--joy) * .11);line-height:1;pointer-events:none;
+    transition:color .12s,transform .12s;}
+  .joy-arr.on{color:var(--c-acc);transform:scale(1.25);}
+  .joy-up{top:7%;left:50%;margin-left:calc(var(--joy) * -.055);}
+  .joy-down{bottom:7%;left:50%;margin-left:calc(var(--joy) * -.055);}
+  .joy-left{left:7%;top:50%;margin-top:calc(var(--joy) * -.055);}
+  .joy-right{right:7%;top:50%;margin-top:calc(var(--joy) * -.055);}
+  .joy-knob{position:absolute;left:50%;top:50%;width:40%;height:40%;border-radius:50%;transform:translate(-50%,-50%);
+    background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.55),rgba(150,165,200,.35) 45%,rgba(40,50,80,.9));
+    border:2px solid var(--c-acc-bdr);box-shadow:0 4px 10px rgba(0,0,0,.5);pointer-events:none;
+    transition:transform .18s cubic-bezier(.3,1.4,.5,1);}
+  .joy.held .joy-knob{transition:none;border-color:var(--c-acc);}
+  .ptz-zoom{display:flex;flex-direction:column;gap:6px;}
+  .ptz-b{width:36px;height:36px;padding:0;border:1px solid rgba(255,255,255,.18);background:rgba(15,21,40,.72);
+    color:#fff;border-radius:50%;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    touch-action:none;user-select:none;-webkit-user-select:none;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
   .ptz-b:hover{background:var(--c-acc-bg);border-color:var(--c-acc-bdr);}
   .ptz-b:active{background:var(--c-acc);}
-  .ptz-presets{align-self:stretch;max-width:130px;background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.18);
-    border-radius:8px;font-size:11px;padding:0 6px;min-height:30px;}
+  .ptz-presets{max-width:164px;background:rgba(15,21,40,.72);color:#fff;border:1px solid rgba(255,255,255,.18);
+    border-radius:16px;font-size:11px;padding:0 10px;min-height:30px;}
   .ptz-presets option{color:#111;}
-  /* On a grid tile the pad is smaller and only shows while the pointer is over it. */
-  .ptz-tile{right:6px;bottom:26px;gap:6px;padding:5px;border-radius:10px;}
-  .ptz-tile .ptz-pad{grid-template-columns:repeat(3,24px);grid-auto-rows:24px;gap:2px;}
-  .ptz-tile .ptz-b{width:24px;height:24px;font-size:11px;border-radius:6px;}
-  .ptz-tile .ptz-presets{min-height:24px;max-width:96px;font-size:10px;}
+  /* On a grid tile it is smaller and only shows while the pointer is over it. */
+  .ptz-tile{right:6px;bottom:26px;gap:5px;}
+  .ptz-tile .ptz-main{gap:6px;}
+  .ptz-tile .joy{--joy:78px;}
+  .ptz-tile .ptz-b{width:26px;height:26px;font-size:14px;}
+  .ptz-tile .ptz-presets{min-height:22px;max-width:110px;font-size:10px;padding:0 6px;}
+  .card.mobile .ptz:not(.ptz-tile) .joy{--joy:96px;}
   .grid-slot:hover > .ptz-tile{display:flex;}
   /* Switches and sensors of a camera, as chips over the top left corner. */
   .ent-bar{position:absolute;top:10px;left:12px;right:56px;z-index:6;display:flex;flex-wrap:wrap;gap:6px;

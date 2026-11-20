@@ -25,6 +25,7 @@ A modern, feature-rich Lovelace card for [Frigate NVR](https://frigate.video) in
 - **Responsive layout**: wide mode shows stream + events side-by-side
 - **Theming**: dark / light / auto, custom accent + background colour picker
 - **Auto-rotate**: configurable interval rotation across cameras
+- **PTZ joystick**: cameras that can pan, tilt or zoom get a joystick automatically
 - **Switches and sensors**: per-camera buttons (Frigate detect/recordings, lights, scripts...) and sensor values over the picture
 
 ## Installation via HACS
@@ -77,7 +78,8 @@ default_view: single     # or 'grid'
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `camera_entity` | string | none | Single camera entity (shorthand) |
-| `cameras` | list | none | List of `{entity, name, span, switches, sensors}` objects. `span` makes a camera occupy several tiles |
+| `cameras` | list | none | List of `{entity, name, span, switches, sensors, ptz}` objects. `span` makes a camera occupy several tiles; `ptz: false` hides that camera's joystick |
+| `ptz_controls` | boolean | `true` | Set to `false` to hide the PTZ joystick on every camera |
 | `title` | string | none | Card title |
 | `subtitle` | string | none | Card subtitle |
 | `default_view` | string | `single` | `single` or `grid` |
@@ -158,8 +160,10 @@ corner of the picture, in the single view and on its grid tile. A tap on a butto
 toggles it (switches, lights, input booleans) or runs it (buttons, scripts, scenes);
 a tap on a sensor opens its history.
 
-In the visual editor, open **Buttons and sensors** under a camera: entities named
-after that camera, like Frigate's `switch.<camera>_detect`, are listed first.
+In the visual editor, open **Buttons and sensors** under a camera. Only that
+camera's entities are offered: those on the same device in Home Assistant, and
+those named after it, like Frigate's `switch.<camera>_detect`. In YAML any entity
+can be used.
 
 ```yaml
 cameras:
@@ -176,6 +180,31 @@ cameras:
 ```
 
 With a single `camera_entity`, `switches` and `sensors` can go at the top level.
+
+### PTZ joystick
+
+A camera that can move gets a joystick over the picture, with zoom buttons and a
+preset menu when it has them. Nothing to configure: the card finds PTZ in either
+of two places:
+
+- **Frigate**, for cameras with ONVIF set up in Frigate (`frigate.ptz`).
+- **The camera's own integration**, when it exposes PTZ buttons such as
+  Reolink's `button.<camera>_ptz_left` … `_ptz_stop`, `_ptz_zoom_in` and
+  `select.<camera>_ptz_preset`. These are left out of the button list in the
+  editor, since the joystick drives them.
+
+Press anywhere on the joystick, or drag the knob, and the camera turns that way
+for as long as you hold it; let go and it stops. A tap in the middle stops it too.
+In the grid each tile shows its own smaller joystick while the pointer is over it.
+
+The PTZ button in the toolbar shows or hides the joystick. To hide it for good on
+one camera, untick **Show PTZ joystick** under that camera in the editor, or:
+
+```yaml
+cameras:
+  - entity: camera.garden
+    ptz: false
+```
 
 ### Events panel
 
